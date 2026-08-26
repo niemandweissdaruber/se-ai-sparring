@@ -1,0 +1,3986 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI vs AI</title>
+  <style>
+    /* ===================================================================
+       AI vs AI — all styling inline, no build step.
+       Per-model accents:  Claude = warm amber,  ChatGPT = green.
+
+       Layout contract (do not break):
+         - two fixed columns: chat (fluid) + second-opinion panel (400px)
+         - the page NEVER scrolls horizontally
+         - each column scrolls vertically on its own
+         - bubbles are capped at 680px so text wraps in a readable column
+       =================================================================== */
+
+    :root {
+      /* Model accents */
+      --claude: #e8a44c;          /* warm amber */
+      --claude-soft: rgba(232, 164, 76, 0.14);
+      --claude-glow: rgba(232, 164, 76, 0.45);
+
+      --chatgpt: #24b47e;         /* green */
+      --chatgpt-soft: rgba(36, 180, 126, 0.14);
+      --chatgpt-glow: rgba(36, 180, 126, 0.42);
+
+      /* Surface palette (dark) */
+      --bg-0: #0e0f13;
+      --bg-1: #16181f;
+      --bg-2: #1d2029;
+      --bg-3: #262a35;
+      --border: #2b2f3a;
+      --border-soft: #23262f;
+
+      --text: #edeef2;
+      --text-dim: #9aa0ad;
+      --text-faint: #6b7180;
+
+      --radius: 16px;
+      --radius-sm: 10px;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      --shadow-soft: 0 4px 14px rgba(0, 0, 0, 0.25);
+
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+              "Liberation Mono", monospace;
+
+      /* Layout constants */
+      --sidebar-w: 264px;         /* fixed width of the left history column */
+      --panel-w: 400px;           /* fixed width of the right column */
+      --bubble-w: 680px;          /* readable measure for message text */
+
+      /* These two flip when the primary model is swapped (set via JS). */
+      --primary-accent: var(--claude);
+      --critic-accent: var(--chatgpt);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
+    /* Belt-and-braces: nothing may ever produce a horizontal scrollbar. */
+    html, body { overflow-x: hidden; max-width: 100%; }
+
+    body {
+      margin: 0;
+      font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 700px at 15% -10%, #1a1d27 0%, transparent 60%),
+        radial-gradient(1000px 600px at 100% 0%, #191b24 0%, transparent 55%),
+        linear-gradient(180deg, #0e0f13 0%, #0b0c10 100%);
+      background-attachment: fixed;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ---- Layout shell ------------------------------------------------- */
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh;          /* correct on mobile browsers with dynamic UI */
+      width: 100%;
+      max-width: 1400px;
+      margin: 0 auto;
+      overflow-x: hidden;      /* the hard guarantee: no sideways scroll */
+    }
+
+    /* ---- Header ------------------------------------------------------- */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 22px;
+      border-bottom: 1px solid var(--border-soft);
+      backdrop-filter: blur(6px);
+      flex: none;
+      min-width: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 20px;
+      letter-spacing: -0.02em;
+      min-width: 0;
+    }
+    .brand .vs {
+      color: var(--text-faint);
+      font-weight: 600;
+      font-size: 15px;
+      padding: 2px 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+
+    /* Primary-model toggle */
+    .toggle {
+      display: flex;
+      gap: 8px;
+      padding: 5px;
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      flex: none;
+    }
+    .toggle button {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-dim);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 14px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.28s ease;
+      white-space: nowrap;
+    }
+    .toggle button:hover { color: var(--text); }
+
+    /* Selected state: soft outer glow + brighter border in the model accent. */
+    .toggle button.active[data-model="claude"] {
+      color: var(--text);
+      border-color: var(--claude);
+      background: var(--claude-soft);
+      box-shadow: 0 0 0 1px var(--claude), 0 0 18px 2px var(--claude-glow);
+    }
+    .toggle button.active[data-model="chatgpt"] {
+      color: var(--text);
+      border-color: var(--chatgpt);
+      background: var(--chatgpt-soft);
+      box-shadow: 0 0 0 1px var(--chatgpt), 0 0 18px 2px var(--chatgpt-glow);
+    }
+
+    /* ---- Lettermark badges ------------------------------------------- */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      font-weight: 700;
+      font-size: 13px;
+      flex: none;
+      color: #0e0f13;
+    }
+    .badge.sm { width: 22px; height: 22px; font-size: 12px; }
+    .badge.claude { background: var(--claude); }
+    .badge.chatgpt { background: var(--chatgpt); }
+
+    /* ---- Main area: three real columns -------------------------------- */
+    /* Sidebar and panel are in-flow grid tracks, not overlays, so neither can
+       ever be pushed off-screen by a long reply. A closed column is a 0px
+       track; transitioning grid-template-columns animates the slide.
+       The middle track is always minmax(0, 1fr) — that 0 minimum is what
+       lets the chat shrink instead of overflowing the page. */
+    .main {
+      flex: 1;
+      min-height: 0;              /* lets the children own the scrolling */
+      display: grid;
+      grid-template-columns: var(--sidebar-w) minmax(0, 1fr) 0px;
+      transition: grid-template-columns 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+      overflow: hidden;
+    }
+    /* Four states. Listed narrowest-selector first so the two-class rule
+       (both columns open) wins on specificity. */
+    .main.sidebar-collapsed { grid-template-columns: 0px minmax(0, 1fr) 0px; }
+    .main.panel-open {
+      grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--panel-w);
+    }
+    .main.panel-open.sidebar-collapsed {
+      grid-template-columns: 0px minmax(0, 1fr) var(--panel-w);
+    }
+
+    /* Chat column */
+    .chat {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;               /* critical: lets it shrink, not overflow */
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .messages {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;           /* column scrolls independently */
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+      padding: 26px 22px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Empty-state hint */
+    .empty {
+      margin: auto;
+      text-align: center;
+      color: var(--text-faint);
+      max-width: 420px;
+      line-height: 1.6;
+    }
+    .empty h2 {
+      color: var(--text-dim);
+      font-weight: 600;
+      margin: 0 0 8px;
+    }
+
+    /* ---- Message bubbles --------------------------------------------- */
+    .msg {
+      display: flex;
+      gap: 12px;
+      max-width: 100%;
+      animation: fadein 0.35s ease both;
+    }
+    .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+    /* Re-rendering an existing message (stream finished, Continue appended)
+       swaps the element — without this it would fade in all over again. */
+    .msg.no-anim { animation: none; }
+
+    @keyframes fadein {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* min-width:0 on the flex child is what actually allows wrapping. */
+    .msg .body { min-width: 0; max-width: 100%; }
+
+    .bubble {
+      max-width: var(--bubble-w);
+      padding: 13px 16px;
+      border-radius: var(--radius);
+      line-height: 1.6;
+      font-size: 15px;
+      box-shadow: var(--shadow-soft);
+      border: 1px solid var(--border-soft);
+      /* Plain-text bubbles keep newlines; markdown bubbles override this. */
+      white-space: pre-wrap;
+      /* Long unbroken strings and URLs wrap instead of widening the page. */
+      overflow-wrap: break-word;
+      word-break: break-word;
+    }
+
+    .msg.user .bubble {
+      background: var(--bg-3);
+      border-top-right-radius: 4px;
+    }
+    /* Assistant bubbles tinted by which model produced them. */
+    .msg.assistant.claude .bubble {
+      background: linear-gradient(180deg, rgba(232,164,76,0.10), rgba(232,164,76,0.04));
+      border-color: rgba(232,164,76,0.28);
+      border-top-left-radius: 4px;
+    }
+    .msg.assistant.chatgpt .bubble {
+      background: linear-gradient(180deg, rgba(36,180,126,0.10), rgba(36,180,126,0.04));
+      border-color: rgba(36,180,126,0.28);
+      border-top-left-radius: 4px;
+    }
+
+    .meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: var(--text-dim);
+      font-weight: 600;
+    }
+    .msg.user .meta { justify-content: flex-end; }
+
+    /* ---- Rebuttal / critique markers --------------------------------- */
+    .tag {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid currentColor;
+      white-space: nowrap;
+    }
+    .rebuttal-tag { color: var(--primary-accent); }
+    .critique-tag { color: var(--critic-accent); }
+
+    .msg.assistant.rebuttal .bubble { border-left: 3px solid var(--primary-accent); }
+    .msg.assistant.critique .bubble { border-left: 3px solid var(--critic-accent); }
+
+    /* ===================================================================
+       Rendered markdown (sanitized). Applied via the .md class.
+       =================================================================== */
+    /* Rendered markdown owns its own whitespace. These selectors are more
+       specific than .bubble / .critique-card so they win regardless of the
+       order those rules appear in this stylesheet. */
+    .md,
+    .bubble.md,
+    .critique-card.md { white-space: normal; }
+    .md > *:first-child { margin-top: 0; }
+    .md > *:last-child  { margin-bottom: 0; }
+
+    .md p { margin: 0 0 10px; }
+    .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+      margin: 18px 0 8px;
+      line-height: 1.3;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .md h1 { font-size: 21px; }
+    .md h2 { font-size: 18px; }
+    .md h3 { font-size: 16px; }
+    .md h4, .md h5, .md h6 { font-size: 15px; color: var(--text-dim); }
+
+    .md ul, .md ol { margin: 0 0 10px; padding-left: 1.35em; }
+    .md li { margin: 3px 0; }
+    .md li > ul, .md li > ol { margin: 4px 0; }
+
+    .md blockquote {
+      margin: 10px 0;
+      padding: 2px 0 2px 13px;
+      border-left: 3px solid var(--border);
+      color: var(--text-dim);
+    }
+
+    .md hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 16px 0;
+    }
+
+    .md a {
+      color: var(--primary-accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      overflow-wrap: break-word;
+    }
+    .md a:hover { filter: brightness(1.15); }
+
+    .md strong { font-weight: 700; }
+    .md em { font-style: italic; }
+
+    /* Inline code — everything except code inside a fenced block. */
+    .md :not(pre) > code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      padding: 1.5px 5px;
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid var(--border-soft);
+      overflow-wrap: break-word;
+    }
+
+    /* Tables scroll inside themselves; display:block is what makes that work. */
+    .md table {
+      display: block;
+      max-width: 100%;
+      overflow-x: auto;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 14px;
+    }
+    .md th, .md td {
+      border: 1px solid var(--border);
+      padding: 7px 11px;
+      text-align: left;
+      vertical-align: top;
+      /* Keeps a wide table from crushing its columns one-letter-wide on a
+         narrow screen — it scrolls inside its own block instead. */
+      min-width: 92px;
+    }
+    .md th { background: var(--bg-2); font-weight: 700; }
+
+    .md img { max-width: 100%; height: auto; border-radius: 8px; }
+
+    /* ---- Fenced code blocks (with their own copy button) ------------- */
+    .code-block {
+      margin: 12px 0;
+      max-width: 100%;
+      background: var(--bg-0);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;           /* keeps the rounded corners clean */
+    }
+    .code-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 5px 7px 5px 12px;
+      background: var(--bg-2);
+      border-bottom: 1px solid var(--border-soft);
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+    }
+    /* The one place horizontal scrolling IS allowed — inside the block. */
+    .code-block pre {
+      margin: 0;
+      padding: 12px 14px;
+      max-width: 100%;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+    }
+    .code-block pre code {
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.55;
+      white-space: pre;           /* no wrapping: it scrolls instead */
+      background: none;
+      border: none;
+      padding: 0;
+      color: var(--text);
+    }
+    /* A bare <pre> that somehow escaped wrapping still must not widen us. */
+    .md pre { max-width: 100%; overflow-x: auto; }
+
+    /* ---- Message action row ------------------------------------------ */
+    .actions {
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    /* Shared button skin: understated by default, prominent on hover. */
+    .act-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-dim);
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .act-btn svg { flex: none; }
+    .act-btn:hover {
+      color: var(--text);
+      border-color: var(--text-faint);
+      transform: translateY(-1px);
+    }
+    /* Compact variant used in code-block headers. */
+    .act-btn.mini {
+      font-size: 11px;
+      letter-spacing: 0.03em;
+      text-transform: none;
+      padding: 4px 9px;
+      background: transparent;
+      border-color: transparent;
+    }
+    .act-btn.mini:hover {
+      background: var(--bg-3);
+      border-color: var(--border);
+      transform: none;
+    }
+    /* Second opinion glows in the critic's accent. */
+    .act-btn.second-opinion:hover {
+      color: var(--text);
+      border-color: var(--critic-accent);
+      box-shadow: 0 0 14px -2px var(--critic-accent);
+    }
+    .act-btn.second-opinion .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--critic-accent);
+      flex: none;
+    }
+    /* Brief post-copy confirmation. */
+    .act-btn.copied {
+      color: var(--text);
+      border-color: var(--primary-accent);
+      background: color-mix(in srgb, var(--primary-accent) 14%, var(--bg-1));
+    }
+
+    /* ---- Composer ----------------------------------------------------- */
+    .composer {
+      flex: none;
+      padding: 14px 22px 20px;
+      border-top: 1px solid var(--border-soft);
+    }
+    .composer .row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      max-width: 820px;
+      margin: 0 auto;
+    }
+    textarea#input {
+      flex: 1;
+      min-width: 0;
+      resize: none;
+      max-height: 180px;
+      min-height: 52px;
+      padding: 15px 16px;
+      font: inherit;
+      font-size: 15px;
+      color: var(--text);
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    textarea#input:focus {
+      border-color: var(--primary-accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-accent) 18%, transparent);
+    }
+    button.send {
+      flex: none;
+      height: 52px;
+      padding: 0 22px;
+      font: inherit;
+      font-weight: 700;
+      font-size: 15px;
+      color: #0e0f13;
+      background: var(--primary-accent);
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: filter 0.2s ease, transform 0.1s ease;
+    }
+    button.send:hover { filter: brightness(1.08); }
+    button.send:active { transform: translateY(1px); }
+    button.send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ---- Typing indicator -------------------------------------------- */
+    .typing {
+      display: inline-flex;
+      gap: 5px;
+      padding: 14px 16px;
+      background: var(--bg-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      border-top-left-radius: 4px;
+    }
+    .typing span {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--text-faint);
+      animation: blink 1.2s infinite ease-in-out both;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.18s; }
+    .typing span:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes blink {
+      0%, 80%, 100% { opacity: 0.25; transform: scale(0.85); }
+      40% { opacity: 1; transform: scale(1); }
+    }
+
+    /* ===================================================================
+       Left column: saved-conversation sidebar.
+       Same collapse mechanic as the panel — a grid track that animates to 0.
+       =================================================================== */
+    .sidebar {
+      min-width: 0;
+      overflow: hidden;             /* clips its own content while collapsed */
+      background: var(--bg-1);
+      border-right: 1px solid transparent;
+    }
+    .main:not(.sidebar-collapsed) .sidebar { border-right-color: var(--border-soft); }
+
+    /* Fixed inner width so content doesn't reflow during the slide.
+       -1px accounts for the sidebar's own right border. */
+    .sidebar-inner {
+      width: calc(var(--sidebar-w) - 1px);
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .sidebar-head { flex: none; padding: 14px 12px 10px; }
+
+    button.new-chat {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font: inherit;
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--text);
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    button.new-chat:hover {
+      border-color: var(--primary-accent);
+      box-shadow: 0 0 14px -3px var(--primary-accent);
+    }
+
+    .sidebar-list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;             /* scrolls independently */
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+      padding: 4px 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .sidebar-empty {
+      padding: 14px 10px;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: var(--text-faint);
+    }
+
+    /* One saved conversation. Actions stay hidden until hover/focus. */
+    .chat-item {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      border-radius: var(--radius-sm);
+      border: 1px solid transparent;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .chat-item:hover { background: var(--bg-2); }
+    .chat-item.active {
+      background: var(--bg-2);
+      border-color: color-mix(in srgb, var(--primary-accent) 45%, transparent);
+    }
+
+    .chat-open {
+      flex: 1;
+      min-width: 0;
+      text-align: left;
+      font: inherit;
+      color: var(--text-dim);
+      background: transparent;
+      border: none;
+      padding: 8px 4px 8px 10px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .chat-item.active .chat-open,
+    .chat-item:hover .chat-open { color: var(--text); }
+
+    .chat-title {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      /* One clean line — long titles ellipsize instead of widening anything. */
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chat-time {
+      display: block;
+      margin-top: 2px;
+      font-size: 11px;
+      color: var(--text-faint);
+      white-space: nowrap;
+    }
+
+    /* Inline rename field, sized to the row. */
+    .chat-rename {
+      flex: 1;
+      min-width: 0;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--bg-0);
+      border: 1px solid var(--primary-accent);
+      border-radius: 8px;
+      padding: 7px 9px;
+      margin: 2px;
+      outline: none;
+    }
+
+    .chat-actions {
+      flex: none;
+      display: flex;
+      gap: 1px;
+      padding-right: 5px;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+    }
+    /* Understated by default, revealed on hover — and always shown while a
+       delete confirmation is pending, so it can't be lost by moving the mouse. */
+    .chat-item:hover .chat-actions,
+    .chat-item:focus-within .chat-actions,
+    .chat-item.confirming .chat-actions { opacity: 1; }
+
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      font: inherit;
+      color: var(--text-faint);
+      background: transparent;
+      border: none;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .icon-btn:hover { color: var(--text); background: var(--bg-3); }
+    .icon-btn.danger:hover { color: #ff8a8a; background: rgba(255, 90, 90, 0.14); }
+
+    /* Two-step delete: the row turns into a yes/no question. */
+    .chat-confirm {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      padding: 8px 8px 8px 10px;
+      font-size: 12.5px;
+      color: var(--text-dim);
+    }
+    .chat-confirm span { flex: 1; min-width: 0; }
+    .chat-confirm button {
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 9px;
+      border-radius: 999px;
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+    .chat-confirm button.yes { color: #ff9b9b; border-color: rgba(255,120,120,0.5); }
+    .chat-confirm button:hover { color: var(--text); }
+
+    .sidebar-foot {
+      flex: none;
+      padding: 10px 12px 14px;
+      border-top: 1px solid var(--border-soft);
+    }
+    button.clear-all {
+      width: 100%;
+      font: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-faint);
+      background: transparent;
+      border: 1px solid var(--border-soft);
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    button.clear-all:hover {
+      color: #ff9b9b;
+      border-color: rgba(255, 120, 120, 0.45);
+      background: rgba(255, 90, 90, 0.08);
+    }
+
+    /* Gentle "storage is filling up" note — never an error. */
+    .storage-note {
+      margin-top: 10px;
+      padding: 9px 10px;
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: var(--text-dim);
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-left: 2px solid var(--primary-accent);
+      border-radius: 8px;
+    }
+    .storage-note.hidden { display: none; }
+
+    /* Header hamburger that collapses / expands the sidebar. */
+    .sidebar-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      width: 34px;
+      height: 34px;
+      color: var(--text-dim);
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    .sidebar-toggle:hover { color: var(--text); border-color: var(--text-faint); }
+
+    /* Backdrop behind the mobile drawer. Inert on desktop. */
+    .scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 65;
+      background: rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      display: none;
+    }
+
+    /* ===================================================================
+       Header: connection status + settings gear
+       =================================================================== */
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .conn { display: flex; align-items: center; gap: 6px; }
+
+    /* One chip per model. Click it to jump straight to that key's field. */
+    .conn-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-faint);
+      background: var(--bg-1);
+      border: 1px solid var(--border-soft);
+      padding: 4px 10px 4px 5px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      white-space: nowrap;
+    }
+    .conn-chip:hover { color: var(--text); border-color: var(--border); }
+    .conn-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--text-faint);
+      flex: none;
+    }
+    /* Connected reads green regardless of which model it is — this is a
+       status light, not a brand accent. */
+    .conn-chip.on { color: var(--text-dim); border-color: var(--border); }
+    .conn-chip.on .conn-dot {
+      background: #3ecf8e;
+      box-shadow: 0 0 7px 1px rgba(62, 207, 142, 0.6);
+    }
+
+    .sidebar-toggle.gear { border-radius: 999px; }
+
+    /* ===================================================================
+       Settings modal
+       =================================================================== */
+    .modal-scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 120;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(0, 0, 0, 0.62);
+      backdrop-filter: blur(3px);
+    }
+    .modal-scrim.open { display: flex; }
+    body.modal-open { overflow: hidden; }
+
+    .modal {
+      width: 100%;
+      max-width: 640px;
+      max-height: min(86dvh, 86vh);
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      animation: fadein 0.2s ease both;
+    }
+    .modal-head {
+      flex: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 15px 18px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .modal-head h2 { margin: 0; font-size: 16px; font-weight: 700; }
+
+    .modal-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .modal-intro {
+      margin: 0;
+      font-size: 13.5px;
+      line-height: 1.6;
+      color: var(--text-dim);
+    }
+    .modal-intro b { color: var(--text); }
+
+    /* ---- One key field ------------------------------------------------ */
+    .key-row {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      padding: 14px;
+      background: var(--bg-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-sm);
+    }
+    .key-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .key-head label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13.5px;
+      font-weight: 700;
+    }
+    .key-state {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-faint);
+      padding: 2px 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .key-state.on { color: #3ecf8e; border-color: rgba(62, 207, 142, 0.45); }
+
+    .key-field { display: flex; gap: 8px; align-items: stretch; }
+    .key-input {
+      flex: 1;
+      min-width: 0;
+      font: inherit;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--text);
+      background: var(--bg-0);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 10px 12px;
+      outline: none;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    .key-input:focus {
+      border-color: var(--primary-accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-accent) 16%, transparent);
+    }
+    .key-eye {
+      flex: none;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 0 12px;
+      cursor: pointer;
+      transition: color 0.18s ease;
+    }
+    .key-eye:hover { color: var(--text); }
+
+    .key-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .act-btn.danger:hover {
+      color: #ff9b9b;
+      border-color: rgba(255, 120, 120, 0.5);
+      box-shadow: none;
+    }
+
+    /* Result of Save / Test / Remove, and the format warning. */
+    .key-status {
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: var(--text-faint);
+      min-height: 1em;
+    }
+    .key-status.ok { color: #3ecf8e; }
+    .key-status.warn { color: var(--claude); }
+    .key-status.err { color: #ff9b9b; }
+
+    /* ---- Setup guides ------------------------------------------------- */
+    .guides { display: flex; flex-direction: column; gap: 16px; }
+    .guide h3 {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 8px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .guide ol {
+      margin: 0;
+      padding-left: 1.3em;
+      font-size: 13.5px;
+      line-height: 1.65;
+      color: var(--text-dim);
+    }
+    .guide li { margin: 4px 0; }
+    .guide a {
+      color: var(--primary-accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      overflow-wrap: break-word;
+    }
+    .guides-note {
+      margin: 0;
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: var(--text-faint);
+      padding: 10px 12px;
+      background: var(--bg-2);
+      border-radius: 8px;
+      border: 1px solid var(--border-soft);
+    }
+
+    /* ---- Privacy notice ----------------------------------------------- */
+    .privacy {
+      padding: 14px;
+      background: var(--bg-2);
+      border: 1px solid var(--border-soft);
+      border-left: 2px solid var(--primary-accent);
+      border-radius: var(--radius-sm);
+    }
+    .privacy h3 { margin: 0 0 9px; font-size: 13.5px; font-weight: 700; }
+    .privacy ul {
+      margin: 0;
+      padding-left: 1.15em;
+      font-size: 12.5px;
+      line-height: 1.65;
+      color: var(--text-dim);
+    }
+    .privacy li { margin: 6px 0; }
+
+    /* ---- Danger zone --------------------------------------------------- */
+    .danger-zone {
+      padding-top: 4px;
+      border-top: 1px solid var(--border-soft);
+    }
+    .danger-note {
+      margin: 9px 0 0;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text-faint);
+    }
+
+    /* ===================================================================
+       Welcome / onboarding (shown until a key is stored)
+       =================================================================== */
+    .welcome {
+      margin: 0 auto;
+      max-width: 660px;
+      width: 100%;
+      padding: 8px 0 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      animation: fadein 0.35s ease both;
+    }
+    .welcome h2 {
+      margin: 0;
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      text-align: center;
+    }
+    .welcome .how {
+      margin: 0;
+      text-align: center;
+      font-size: 15px;
+      color: var(--text-dim);
+    }
+    .welcome .lead {
+      margin: 0;
+      font-size: 13.5px;
+      line-height: 1.7;
+      color: var(--text-faint);
+      text-align: center;
+    }
+    .welcome-cta {
+      align-self: center;
+      font: inherit;
+      font-weight: 700;
+      font-size: 14.5px;
+      color: #0e0f13;
+      background: var(--primary-accent);
+      border: none;
+      padding: 12px 22px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: filter 0.2s ease, transform 0.1s ease;
+    }
+    .welcome-cta:hover { filter: brightness(1.08); }
+    .welcome-cta:active { transform: translateY(1px); }
+
+    /* A disabled action explains itself through its tooltip. */
+    .act-btn[disabled] {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .act-btn[disabled]:hover {
+      color: var(--text-dim);
+      border-color: var(--border);
+      box-shadow: none;
+      transform: none;
+    }
+    .float-critique[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+    /* ---- Streaming caret --------------------------------------------- */
+    /* Our own element, appended after sanitization — never model output. */
+    .stream-cursor {
+      display: inline-block;
+      width: 7px;
+      height: 1.02em;
+      margin-left: 2px;
+      vertical-align: -0.17em;
+      border-radius: 2px;
+      background: var(--primary-accent);
+      animation: caret-blink 1.05s steps(2, start) infinite;
+    }
+    /* Caret takes the colour of whichever model is writing. */
+    .msg.assistant.claude .stream-cursor { background: var(--claude); }
+    .msg.assistant.chatgpt .stream-cursor { background: var(--chatgpt); }
+    .critique-card .stream-cursor { background: var(--critic-accent); }
+
+    @keyframes caret-blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    /* Send / Send-back turn into Stop while a stream is running. */
+    button.send.stop,
+    button.send-back.stop {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: var(--text);
+      background: var(--bg-3);
+      box-shadow: inset 0 0 0 1px var(--border);
+    }
+    button.send.stop:hover,
+    button.send-back.stop:hover {
+      filter: none;
+      color: #ff9b9b;
+      box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.5);
+    }
+
+    /* ---- Truncation notice + Continue -------------------------------- */
+    /* Subtle and informational — this is not an error state. */
+    .cutoff-note {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 7px;
+      padding: 6px 11px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-faint);
+      background: var(--bg-1);
+      border: 1px dashed var(--border);
+      border-radius: 999px;
+      width: fit-content;
+      max-width: 100%;
+    }
+    .cutoff-note .cutoff-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--text-faint);
+      flex: none;
+    }
+    /* The Continue button leans on the primary accent — it resumes generation. */
+    .act-btn.continue-btn:hover {
+      color: var(--text);
+      border-color: var(--primary-accent);
+      box-shadow: 0 0 14px -2px var(--primary-accent);
+    }
+    .act-btn.continue-btn[disabled] { opacity: 0.55; cursor: progress; }
+
+    /* ---- Critique panel (right column) ------------------------------- */
+    .panel {
+      min-width: 0;
+      overflow: hidden;            /* clips its own content while collapsed */
+      background: var(--bg-1);
+      border-left: 1px solid transparent;
+      box-shadow: -18px 0 40px rgba(0, 0, 0, 0.3);
+    }
+    .main.panel-open .panel { border-left-color: var(--border-soft); }
+
+    /* Fixed inner width so the content doesn't reflow during the slide.
+       The -1px accounts for the panel's own left border, so the column is
+       exactly --panel-w wide and contributes zero overflow. */
+    .panel-inner {
+      width: calc(var(--panel-w) - 1px);
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .panel-head {
+      flex: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .panel-title {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-weight: 700;
+      font-size: 15px;
+      min-width: 0;
+    }
+    .panel-title small {
+      display: block;
+      font-weight: 500;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+    .panel-close {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 8px;
+      flex: none;
+    }
+    .panel-close:hover { color: var(--text); background: var(--bg-2); }
+
+    .panel-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;            /* scrolls independently of the chat */
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+      padding: 18px;
+    }
+
+    /* Indicator stripe in the critic's accent */
+    .critique-card {
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--critic-accent);
+      background: var(--bg-2);
+      border-radius: var(--radius-sm);
+      padding: 14px 15px;
+      line-height: 1.6;
+      font-size: 14.5px;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      animation: fadein 0.35s ease both;
+    }
+    .critique-context {
+      font-size: 12px;
+      color: var(--text-faint);
+      margin-bottom: 12px;
+      padding: 9px 11px;
+      background: var(--bg-0);
+      border-radius: 8px;
+      border: 1px solid var(--border-soft);
+      max-height: 90px;
+      overflow: hidden;
+      overflow-wrap: break-word;
+    }
+    .critique-context b { color: var(--text-dim); }
+
+    .panel-foot {
+      flex: none;
+      padding: 14px 18px;
+      border-top: 1px solid var(--border-soft);
+    }
+    button.send-back {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      font: inherit;
+      font-weight: 700;
+      font-size: 14px;
+      color: #0e0f13;
+      background: var(--primary-accent);
+      border: none;
+      padding: 13px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: filter 0.2s ease;
+    }
+    button.send-back:hover { filter: brightness(1.08); }
+    button.send-back:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ---- Floating "Critique selection" button ------------------------ */
+    .float-critique {
+      position: fixed;
+      z-index: 80;
+      display: none;
+      align-items: center;
+      gap: 7px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      color: #0e0f13;
+      background: var(--critic-accent);
+      border: none;
+      padding: 8px 13px;
+      border-radius: 999px;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      animation: fadein 0.15s ease both;
+    }
+    .float-critique.show { display: inline-flex; }
+
+    /* ---- Friendly error banner --------------------------------------- */
+    .banner {
+      flex: none;
+      margin: 16px 22px 0;
+      padding: 13px 16px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--primary-accent);
+      color: var(--text-dim);
+      font-size: 14px;
+      line-height: 1.5;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      animation: fadein 0.3s ease both;
+    }
+    .banner .badge { flex: none; }
+    .banner.hidden { display: none; }
+
+    /* ===================================================================
+       Narrow screens: the right column becomes a slide-up bottom sheet and
+       the left column becomes a slide-in drawer. Both leave the grid, so the
+       chat keeps the full width and nothing can squeeze it.
+       =================================================================== */
+    @media (max-width: 900px) {
+      /* One column only — sidebar and panel both leave the grid entirely. */
+      .main,
+      .main.sidebar-collapsed,
+      .main.panel-open,
+      .main.panel-open.sidebar-collapsed {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      /* Sidebar as an overlay drawer (JS collapses it by default here). */
+      .sidebar {
+        position: fixed;
+        left: 0; top: 0; bottom: 0;
+        z-index: 68;
+        width: min(300px, 86vw);
+        border-right: 1px solid var(--border);
+        transform: translateX(-101%);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 18px 0 40px rgba(0, 0, 0, 0.45);
+      }
+      .main:not(.sidebar-collapsed) .sidebar { transform: translateX(0); }
+      .sidebar-inner { width: 100%; }
+
+      /* Backdrop, only while the drawer is open. Tapping it closes the drawer.
+         .scrim is a sibling that follows .main, which is what makes this work. */
+      .scrim { display: block; }
+      .main:not(.sidebar-collapsed) ~ .scrim { opacity: 1; pointer-events: auto; }
+
+      .panel {
+        position: fixed;
+        left: 0; right: 0; bottom: 0; top: auto;
+        z-index: 70;
+        height: min(88dvh, 88vh);
+        border-left: none;
+        border-top: 1px solid var(--border);
+        border-radius: 18px 18px 0 0;
+        transform: translateY(101%);
+        transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 -18px 40px rgba(0, 0, 0, 0.45);
+      }
+      .main.panel-open .panel { transform: translateY(0); }
+
+      .panel-inner { width: 100%; }
+
+      /* Small grabber, so it reads as a sheet. */
+      .panel-head::before {
+        content: "";
+        position: absolute;
+        top: 7px; left: 50%;
+        transform: translateX(-50%);
+        width: 38px; height: 4px;
+        border-radius: 999px;
+        background: var(--border);
+      }
+      .panel-head { position: relative; padding-top: 20px; }
+
+      .toggle button span.label { display: none; } /* keep badges only */
+      .conn-text { display: none; }                /* dot + badge only */
+      .conn-chip { padding: 4px 7px 4px 5px; }
+      .header-right { gap: 7px; }
+      .brand span { white-space: nowrap; }         /* never wrap to two lines */
+      .modal-scrim { padding: 0; align-items: flex-end; }
+      .modal { max-width: none; max-height: 92dvh; border-radius: 18px 18px 0 0; }
+      .brand { font-size: 17px; }
+      .brand .vs { display: none; }
+      .messages { padding: 20px 14px 8px; }
+      .composer { padding: 12px 14px 16px; }
+      header { padding: 12px 14px; gap: 10px; }
+    }
+
+    /* ===================================================================
+       Very narrow: the separate status chips don't fit alongside the toggle
+       and the gear, so the status moves onto the toggle buttons as a dot.
+       Nothing is lost, and the gear stays reachable — it's the only way to
+       add a key on a phone.
+       =================================================================== */
+    @media (max-width: 560px) {
+      .conn { display: none; }
+
+      .toggle button { position: relative; padding: 8px 10px; }
+      /* Status dot, top-right of each model button. */
+      .toggle button::after {
+        content: "";
+        position: absolute;
+        top: 3px; right: 3px;
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        background: var(--text-faint);
+        border: 1.5px solid var(--bg-1);
+      }
+      .toggle button[data-connected="true"]::after { background: #3ecf8e; }
+
+      header { gap: 8px; padding: 11px 12px; }
+      .brand { font-size: 15px; gap: 8px; }
+      .header-right { gap: 8px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- ================= Header ================= -->
+    <header>
+      <div class="brand">
+        <!-- Collapses / expands the saved-conversation sidebar. -->
+        <button class="sidebar-toggle" id="sidebar-toggle"
+                onclick="toggleSidebar()" title="Toggle chat history"
+                aria-label="Toggle chat history">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M4 6h16M4 12h16M4 18h16"/>
+          </svg>
+        </button>
+        <span>AI vs AI</span>
+        <span class="vs">answer &middot; critique</span>
+      </div>
+
+      <div class="header-right">
+        <!-- Per-model connection status; click a chip to manage that key. -->
+        <div class="conn" id="conn"></div>
+
+        <!-- Primary-model toggle: selected button gets the accent glow. -->
+        <div class="toggle" id="toggle">
+          <button data-model="claude" class="active" onclick="setPrimary('claude')">
+            <span class="badge sm claude">C</span>
+            <span class="label">Claude primary</span>
+          </button>
+          <button data-model="chatgpt" onclick="setPrimary('chatgpt')">
+            <span class="badge sm chatgpt">G</span>
+            <span class="label">ChatGPT primary</span>
+          </button>
+        </div>
+
+        <button class="sidebar-toggle gear" onclick="openSettings()"
+                title="Settings — your API keys" aria-label="Settings">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none"
+               stroke="currentColor" stroke-width="1.9" stroke-linecap="round"
+               stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3.2"/>
+            <path d="M19.4 14.5a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H2.8a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1A1.7 1.7 0 0 0 10 3.5v-.2a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ================= Main: chat column + panel column ============= -->
+    <div class="main" id="main">
+      <!-- ===== Left column: saved conversations (localStorage only) ===== -->
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-inner">
+          <div class="sidebar-head">
+            <button class="new-chat" onclick="newChat()">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                   stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+              New chat
+            </button>
+          </div>
+
+          <!-- Rendered by renderSidebar(); newest conversation first. -->
+          <div class="sidebar-list" id="chat-list"></div>
+
+          <div class="sidebar-foot">
+            <button class="clear-all" onclick="clearAllHistory()">Clear all history</button>
+            <!-- Gentle nudge when localStorage is filling up. -->
+            <div class="storage-note hidden" id="storage-note"></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Middle column: the conversation -->
+      <div class="chat">
+        <!-- Friendly connection banner (hidden unless a key is missing) -->
+        <div class="banner hidden" id="banner"></div>
+
+        <div class="messages" id="messages">
+          <div class="empty" id="empty">
+            <h2>Two minds, one question.</h2>
+            <p>Ask anything. The primary model answers — then get a
+               <em>second opinion</em> from the other model whenever you want.</p>
+          </div>
+        </div>
+
+        <!-- Composer -->
+        <div class="composer">
+          <div class="row">
+            <textarea id="input" rows="1"
+              placeholder="Ask Claude anything…"
+              oninput="autogrow(this)"
+              onkeydown="onKey(event)"></textarea>
+            <!-- Doubles as Stop while a reply is streaming. -->
+            <button class="send" id="send" onclick="onSendClick()">Send</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right column: the critique panel -->
+      <aside class="panel" id="panel">
+        <div class="panel-inner">
+          <div class="panel-head">
+            <div class="panel-title">
+              <span class="badge sm" id="panel-badge">G</span>
+              <div>
+                Second opinion
+                <small id="panel-sub">Reviewed by ChatGPT</small>
+              </div>
+            </div>
+            <button class="panel-close" onclick="closePanel()" title="Close">&times;</button>
+          </div>
+
+          <div class="panel-body" id="panel-body"></div>
+
+          <div class="panel-foot">
+            <!-- Doubles as Stop while a critique is streaming. -->
+            <button class="send-back" id="send-back" onclick="onPanelClick()">
+              <span id="send-back-label">Send back to Claude</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Backdrop for the mobile sidebar drawer (inert on wide screens). -->
+    <div class="scrim" id="scrim" onclick="collapseSidebar()"></div>
+  </div>
+
+  <!-- ===================================================================
+       Settings — the user's own API keys.
+       Nothing here is sent anywhere except as the x-provider-key header on
+       calls to /api/chat, which forwards it to the provider and keeps
+       nothing. See functions/api/chat.js.
+       =================================================================== -->
+  <div class="modal-scrim" id="settings" onclick="onSettingsScrim(event)">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-head">
+        <h2 id="settings-title">Settings</h2>
+        <button class="panel-close" onclick="closeSettings()" title="Close"
+                aria-label="Close settings">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <p class="modal-intro">
+          AI vs AI has no API keys of its own. Connect your own and the providers
+          bill you directly. <b>One key is enough to chat</b> — the second-opinion
+          feature needs both.
+        </p>
+
+        <!-- ===== Anthropic ===== -->
+        <section class="key-row">
+          <div class="key-head">
+            <label for="key-input-claude">
+              <span class="badge sm claude">C</span> Claude — Anthropic key
+            </label>
+            <span class="key-state" id="key-state-claude">Not connected</span>
+          </div>
+          <div class="key-field">
+            <input type="password" id="key-input-claude" class="key-input"
+                   placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
+            <button class="key-eye" id="key-eye-claude"
+                    onclick="toggleKeyVisibility('claude')">Show</button>
+          </div>
+          <div class="key-actions">
+            <button class="act-btn" onclick="saveKey('claude')">Save</button>
+            <button class="act-btn" id="key-test-claude" onclick="testKey('claude')">Test key</button>
+            <button class="act-btn danger" onclick="removeKey('claude')">Remove key</button>
+          </div>
+          <div class="key-status" id="key-status-claude"></div>
+        </section>
+
+        <!-- ===== OpenAI ===== -->
+        <section class="key-row">
+          <div class="key-head">
+            <label for="key-input-chatgpt">
+              <span class="badge sm chatgpt">G</span> ChatGPT — OpenAI key
+            </label>
+            <span class="key-state" id="key-state-chatgpt">Not connected</span>
+          </div>
+          <div class="key-field">
+            <input type="password" id="key-input-chatgpt" class="key-input"
+                   placeholder="sk-…" autocomplete="off" spellcheck="false" />
+            <button class="key-eye" id="key-eye-chatgpt"
+                    onclick="toggleKeyVisibility('chatgpt')">Show</button>
+          </div>
+          <div class="key-actions">
+            <button class="act-btn" onclick="saveKey('chatgpt')">Save</button>
+            <button class="act-btn" id="key-test-chatgpt" onclick="testKey('chatgpt')">Test key</button>
+            <button class="act-btn danger" onclick="removeKey('chatgpt')">Remove key</button>
+          </div>
+          <div class="key-status" id="key-status-chatgpt"></div>
+        </section>
+
+        <!-- Setup steps + privacy notice are injected here by JS, so the
+             same text is used on the welcome screen. -->
+        <div id="settings-guides"></div>
+        <div id="settings-privacy"></div>
+
+        <section class="danger-zone">
+          <button class="clear-all" onclick="clearAllMyData()">Clear all my data</button>
+          <p class="danger-note">
+            Removes your keys and every saved conversation from this browser.
+            Your keys stay valid at the providers — revoke them there if needed.
+          </p>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating selection-critique button -->
+  <button class="float-critique" id="float" onmousedown="onFloatClick(event)">
+    <span class="dot"></span> Critique selection
+  </button>
+
+  <!-- ===================================================================
+       Markdown rendering + sanitizing, both from CDN.
+         marked     — turns model markdown into HTML
+         DOMPurify  — scrubs that HTML before it ever touches the DOM
+       Model output is UNTRUSTED. Nothing goes to innerHTML without going
+       through DOMPurify first. If either script fails to load, the app
+       falls back to plain text (see mdReady() below) — never raw HTML.
+       =================================================================== -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+
+  <script>
+  // =====================================================================
+  //  AI vs AI — front-end logic.  All state lives in memory (no storage).
+  // =====================================================================
+
+  // Model metadata, keyed by our internal ids.
+  const MODELS = {
+    claude:  { provider: "anthropic", name: "Claude",  letter: "C", cls: "claude",
+               keyName: "Anthropic" },
+    chatgpt: { provider: "openai",    name: "ChatGPT", letter: "G", cls: "chatgpt",
+               keyName: "OpenAI" },
+  };
+
+  // --- State ---------------------------------------------------------
+  let primary = "claude";               // which model runs the main chat
+  let critic  = "chatgpt";              // the other one
+  // Conversation history sent to the primary model on every turn.
+  // Each entry: { role: "user", content: "..." } | { role: "assistant", ... }
+  // This is the API view — it includes the framed "here is a critique" turn
+  // that never appears as a bubble.
+  let history = [];
+
+  // The RENDER view: one record per visible message, in display order.
+  //   { id, role, model, kind, text, truncated, el }
+  //   kind: "plain" | "critique" | "rebuttal"
+  //   text: the ORIGINAL markdown — what Copy copies and what we persist
+  //   el:   the live DOM node (not persisted)
+  // Kept separate from `history` because a message can be edited in place
+  // (Continue appends to it) and because this is what we save + reload.
+  let messages = [];
+  let msgSeq = 0;                       // local id counter for records
+  // The last critique shown in the panel, so "Send back" knows what to feed.
+  // criticModel is captured too, so a mid-flight role swap can't mislabel it.
+  let lastCritique = { text: "", sourceQuestion: "", criticModel: "" };
+  // Remembers a text selection inside a reply for "Critique selection".
+  let pendingSelection = { text: "", question: "" };
+
+  const $ = (id) => document.getElementById(id);
+
+  // --- Inline icons (our own markup — safe to use as innerHTML) -------
+  const ICON_COPY =
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"' +
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="9" y="9" width="11" height="11" rx="2"/>' +
+    '<path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>';
+  const ICON_CHECK =
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"' +
+    ' stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M20 6 9 17l-5-5"/></svg>';
+  const ICON_STOP =
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"' +
+    ' aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>';
+  const ICON_PENCIL =
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"' +
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M4 20h4L20 8l-4-4L4 16v4z"/></svg>';
+  const ICON_TRASH =
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"' +
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
+  const ICON_CONTINUE =
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"' +
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M5 4l9 8-9 8V4z"/><path d="M19 4v16"/></svg>';
+
+  // --- Primary/critic role swap -------------------------------------
+  function setPrimary(model) {
+    if (model === primary) return;
+
+    // If a conversation is underway, confirm before switching. Since chats are
+    // saved now, this no longer destroys anything — the current conversation
+    // is archived to the sidebar and a fresh one starts.
+    if (history.length > 0) {
+      const ok = confirm(
+        "Switching the primary model starts a new chat. The current one stays " +
+        "in your saved history. Continue?"
+      );
+      if (!ok) return;
+    }
+
+    // The conversation being replaced stays in the sidebar — swapping roles
+    // starts a NEW chat rather than destroying the old one.
+    saveCurrent();
+
+    primary = model;
+    critic = model === "claude" ? "chatgpt" : "claude";
+
+    resetConversationState();
+    applyRoleStyling();
+    renderSidebar();
+  }
+
+  // Update every label, accent variable and badge to match the current roles.
+  function applyRoleStyling() {
+    const p = MODELS[primary], c = MODELS[critic];
+
+    // Accent CSS variables drive bubbles, buttons, glows, etc.
+    const root = document.documentElement.style;
+    root.setProperty("--primary-accent", `var(--${primary})`);
+    root.setProperty("--critic-accent", `var(--${critic})`);
+
+    // Toggle active state + glow.
+    document.querySelectorAll("#toggle button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.model === primary);
+    });
+
+    // Composer placeholder.
+    $("input").placeholder = `Ask ${p.name} anything…`;
+
+    // Panel: it always shows the CRITIC's review.
+    const badge = $("panel-badge");
+    badge.textContent = c.letter;
+    badge.className = "badge sm " + c.cls;
+    $("panel-sub").textContent = `Reviewed by ${c.name}`;
+
+    // "Send back to <primary>" button (unless it is currently a Stop button).
+    if (!(activeStream && activeStream.source === "panel")) {
+      $("send-back-label").textContent = `Send back to ${p.name}`;
+    }
+
+    // Roles changed, so which key matters changed too.
+    renderConnectionStatus();
+    applyCriticAvailability();
+  }
+
+  // --- Composer helpers ---------------------------------------------
+  function autogrow(el) {
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 180) + "px";
+  }
+  function onKey(e) {
+    // Enter sends, Shift+Enter makes a newline.
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }
+
+  // =====================================================================
+  //  Markdown: parse -> SANITIZE -> insert.  Never skip the middle step.
+  // =====================================================================
+
+  // Both libraries must be present. If a CDN is blocked we degrade to text.
+  function mdReady() {
+    return typeof window.marked !== "undefined" &&
+           typeof window.DOMPurify !== "undefined";
+  }
+
+  // Force every link to open in a new tab, safely. Registered once.
+  let purifyHooked = false;
+  function hookPurify() {
+    if (purifyHooked || typeof DOMPurify === "undefined") return;
+    DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+      if (node.tagName === "A") {
+        node.setAttribute("target", "_blank");
+        node.setAttribute("rel", "noopener noreferrer");
+      }
+    });
+    purifyHooked = true;
+  }
+
+  // Sanitizer policy. DOMPurify already drops <script>, on* handlers and
+  // javascript: URLs; these lists close off the rest of the noisy surface.
+  const PURIFY_CONFIG = {
+    USE_PROFILES: { html: true },          // no SVG / MathML at all
+    FORBID_TAGS: [
+      "script", "style", "iframe", "object", "embed", "form",
+      "input", "button", "textarea", "select", "link", "meta", "base",
+    ],
+    FORBID_ATTR: ["style", "srcset", "formaction", "ping"],
+    ALLOW_DATA_ATTR: false,
+  };
+
+  // Render `text` (raw model markdown) into `el`. Falls back to plain text.
+  //
+  // opts.streaming — the reply is still arriving:
+  //   * unterminated markdown is closed off first (see closeOpenMarkdown)
+  //   * code-block copy buttons are NOT attached; they go on once, at the
+  //     end, so a long reply isn't re-decorated on every repaint.
+  // Sanitization happens either way — there is no path to innerHTML that
+  // skips DOMPurify.
+  function renderMarkdownInto(el, text, opts = {}) {
+    const src = typeof text === "string" ? text : String(text ?? "");
+
+    if (!mdReady()) {
+      // No parser/sanitizer available — plain text only, never innerHTML.
+      el.textContent = src;
+      return;
+    }
+
+    hookPurify();
+    const source = opts.streaming ? closeOpenMarkdown(src) : src;
+    const dirty = marked.parse(source, { gfm: true, breaks: true });
+    el.innerHTML = DOMPurify.sanitize(dirty, PURIFY_CONFIG);
+    el.classList.add("md");
+    if (!opts.streaming) decorateCodeBlocks(el);
+  }
+
+  // Wrap each fenced block in a header bar + per-block copy button.
+  function decorateCodeBlocks(root) {
+    root.querySelectorAll("pre").forEach((pre) => {
+      if (pre.closest(".code-block")) return;         // already decorated
+
+      const code = pre.querySelector("code");
+      const langClass = code
+        ? Array.from(code.classList).find((c) => c.startsWith("language-"))
+        : null;
+      const lang = langClass ? langClass.slice("language-".length) : "code";
+
+      const block = document.createElement("div");
+      block.className = "code-block";
+
+      const head = document.createElement("div");
+      head.className = "code-head";
+      const label = document.createElement("span");
+      label.textContent = lang;                        // textContent: no HTML
+      head.appendChild(label);
+      head.appendChild(
+        makeCopyButton(() => (code || pre).textContent, { mini: true })
+      );
+
+      pre.replaceWith(block);
+      block.appendChild(head);
+      block.appendChild(pre);
+    });
+  }
+
+  // =====================================================================
+  //  Clipboard
+  // =====================================================================
+
+  // Async clipboard first, hidden-textarea fallback second. Returns bool.
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_) { /* fall through to the legacy path */ }
+
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;top:-1000px;left:-1000px;opacity:0";
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Build a Copy button. getText() is called at click time so it always
+  // returns the message's ORIGINAL markdown (not the rendered HTML).
+  function makeCopyButton(getText, opts = {}) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "act-btn copy-btn" + (opts.mini ? " mini" : "");
+    btn.title = "Copy to clipboard";
+    const idle = () => { btn.innerHTML = ICON_COPY + "<span>Copy</span>"; };
+    idle();
+
+    btn.onclick = async () => {
+      if (btn._revert) clearTimeout(btn._revert);      // rapid re-clicks
+      const ok = await copyText(getText());
+      btn.innerHTML = ok
+        ? ICON_CHECK + "<span>Copied</span>"
+        : ICON_COPY + "<span>Press ⌘C</span>";
+      btn.classList.toggle("copied", ok);
+      btn._revert = setTimeout(() => {
+        btn.classList.remove("copied");
+        idle();
+      }, 1500);
+    };
+    return btn;
+  }
+
+  // --- Rendering -----------------------------------------------------
+  function clearEmpty() {
+    const e = $("empty");
+    if (e) e.remove();
+  }
+
+  // Build the DOM for one message record. Pure function of the record, so
+  // it can be re-run after Continue appends text (see refreshMessage).
+  // rec: { role, model, kind, text, truncated }
+  function buildMessageEl(rec) {
+    const wrap = document.createElement("div");
+    const modelCls = rec.role === "assistant" ? " " + MODELS[rec.model].cls : "";
+    const kindCls =
+      (rec.kind === "rebuttal" ? " rebuttal" : "") +
+      (rec.kind === "critique" ? " critique" : "");
+    wrap.className = `msg ${rec.role}${modelCls}${kindCls}`;
+
+    // Meta row (badge + name + optional tag, or "You").
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    if (rec.role === "assistant") {
+      const m = MODELS[rec.model];
+      const tag =
+        rec.kind === "rebuttal"
+          ? ' <span class="tag rebuttal-tag">Rebuttal</span>'
+          : rec.kind === "critique"
+          ? ' <span class="tag critique-tag">Critique</span>'
+          : "";
+      meta.innerHTML =
+        `<span class="badge sm ${m.cls}">${m.letter}</span> ${m.name}` + tag;
+    } else {
+      meta.textContent = "You";
+    }
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    if (rec.role === "assistant") {
+      // While streaming the painter owns this element; render what we have
+      // so far and let it repaint on a throttle.
+      renderMarkdownInto(bubble, rec.text, { streaming: !!rec.streaming });
+      if (rec.streaming) appendCursor(bubble);
+    } else {
+      bubble.textContent = rec.text;          // our own input: plain text
+    }
+
+    const body = document.createElement("div");
+    body.className = "body";
+    body.appendChild(meta);
+    body.appendChild(bubble);
+
+    // Every model message gets an action row: Second opinion + Copy
+    // (+ Continue when the reply was cut off or stopped). None of it is
+    // attached while the reply is still arriving — the buttons appear once,
+    // when the message is complete.
+    if (rec.role === "assistant" && !rec.streaming) {
+      if (rec.truncated || rec.stopped) body.appendChild(makeCutoffNote(rec));
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+
+      // The critic's in-thread critique doesn't get a "Second opinion"
+      // button — asking the critic to review its own critique is a loop.
+      if (rec.kind !== "critique") {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "act-btn second-opinion";
+        btn.innerHTML = `<span class="dot"></span> Second opinion`;
+        btn.onclick = () => critiqueMessage(rec.text);
+        // Gated here, at build time, so a message rendered by ANY path
+        // (first paint, stream finishing, Continue) starts correctly.
+        // applyCriticAvailability() then keeps it in sync as keys change.
+        setCriticButtonState(btn);
+        actions.appendChild(btn);
+      }
+
+      // Continue resumes a reply that was cut off or stopped. Only offered
+      // where resuming is unambiguous: this record must be the tail of
+      // `history`, i.e. the model's latest turn. See canContinue().
+      if ((rec.truncated || rec.stopped) && canContinue(rec)) {
+        const cont = document.createElement("button");
+        cont.type = "button";
+        cont.className = "act-btn continue-btn";
+        cont.innerHTML = ICON_CONTINUE + "<span>Continue</span>";
+        cont.onclick = () => continueMessage(rec, cont);
+        actions.appendChild(cont);
+      }
+
+      // Copies the original markdown source of this message. Reads rec.text
+      // at click time, so it includes anything Continue appended.
+      actions.appendChild(makeCopyButton(() => rec.text));
+
+      body.appendChild(actions);
+    }
+
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  // Append a new message record + its DOM. Returns the record.
+  // rec: { role, text, model?, kind?, truncated? }
+  function addMessage(rec) {
+    clearEmpty();
+    const record = {
+      id: ++msgSeq,
+      kind: "plain",
+      truncated: false,
+      stopped: false,
+      streaming: false,
+      model: null,
+      ...rec,
+    };
+    messages.push(record);
+    record.el = buildMessageEl(record);
+    $("messages").appendChild(record.el);
+
+    // A new turn can invalidate an older message's Continue button.
+    refreshContinueButtons(record);
+    // A freshly built "Second opinion" button starts enabled; re-apply the
+    // critic-key gate to it.
+    applyCriticAvailability();
+    scrollDown();
+    return record;
+  }
+
+  // Re-render one record in place — used when a stream finishes and when
+  // Continue appends to rec.text. The replacement skips the entrance
+  // animation, so a completed reply doesn't visibly flash.
+  function refreshMessage(rec) {
+    const fresh = buildMessageEl(rec);
+    fresh.classList.add("no-anim");
+    rec.el.replaceWith(fresh);
+    rec.el = fresh;
+  }
+
+  // Drop stale Continue buttons: once a newer turn exists, an older cut-off
+  // reply is no longer the tail of `history` and can't be resumed cleanly.
+  function refreshContinueButtons(except) {
+    messages.forEach((rec) => {
+      if (rec === except || rec.role !== "assistant" || !rec.truncated) return;
+      const btn = rec.el && rec.el.querySelector(".continue-btn");
+      if (btn && !canContinue(rec)) btn.remove();
+    });
+  }
+
+  // The small "didn't finish" notice. Informational, not an error.
+  function makeCutoffNote(rec) {
+    const note = document.createElement("div");
+    note.className = "cutoff-note";
+    const dot = document.createElement("span");
+    dot.className = "cutoff-dot";
+    const label = document.createElement("span");
+    label.textContent = rec && rec.stopped
+      ? "You stopped this response."
+      : "Response was cut off (length limit).";
+    note.appendChild(dot);
+    note.appendChild(label);
+    return note;
+  }
+
+  // Drop a message record and its DOM (used when a stream is stopped or
+  // fails before producing any text).
+  function removeMessage(rec) {
+    const i = messages.indexOf(rec);
+    if (i !== -1) messages.splice(i, 1);
+    if (rec.el) rec.el.remove();
+    if (!messages.length) resetMessagesEmptyState();
+  }
+
+  // Put the empty state back when the last message goes away. With no key
+  // stored this is the full welcome/onboarding screen; once connected it's
+  // the short hint.
+  function resetMessagesEmptyState() {
+    const m = $("messages");
+    m.innerHTML = "";
+    if (!anyKey()) {
+      m.appendChild(buildWelcome());
+      return;
+    }
+    m.innerHTML =
+      '<div class="empty" id="empty"><h2>Two minds, one question.</h2>' +
+      '<p>Ask anything. The primary model answers — then get a ' +
+      '<em>second opinion</em> from the other model whenever you want.</p></div>';
+  }
+
+  // Typing indicator; returns a node you remove() when the reply arrives.
+  function showTyping(model) {
+    clearEmpty();
+    const wrap = document.createElement("div");
+    wrap.className = `msg assistant ${MODELS[model].cls}`;
+    const body = document.createElement("div");
+    body.className = "body";
+    const m = MODELS[model];
+    body.innerHTML =
+      `<div class="meta"><span class="badge sm ${m.cls}">${m.letter}</span> ${m.name}</div>` +
+      `<div class="typing"><span></span><span></span><span></span></div>`;
+    wrap.appendChild(body);
+    $("messages").appendChild(wrap);
+    scrollDown();
+    return wrap;
+  }
+
+  // Follows the conversation only while the reader is at the bottom; see
+  // makeAutoScroller. Use scrollDownForce() for deliberate jumps (sending a
+  // message, opening a saved chat).
+  function scrollDown() { chatScroller.tick(); }
+  function scrollDownForce() { chatScroller.reset(); }
+
+  // --- Networking ----------------------------------------------------
+  // One helper for all three modes. Returns { text } or throws/handles error.
+  // The user's own key rides in the x-provider-key header (see providerHeaders).
+  async function callApi(payload) {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: providerHeaders(payload.provider),
+      body: JSON.stringify(payload),
+    });
+    return res.json();
+  }
+
+  // --- Main chat turn ------------------------------------------------
+  async function sendMessage() {
+    const input = $("input");
+    const text = input.value.trim();
+    if (!text) return;
+
+    // No key for the model that would answer: open Settings rather than
+    // sending a request that can only fail.
+    if (!hasKey(primary)) {
+      hideBanner();
+      openSettings(primary);
+      return;
+    }
+
+    hideBanner();
+    input.value = "";
+    autogrow(input);
+
+    // Show + record the user's message.
+    addMessage({ role: "user", text: text });
+    scrollDownForce();                   // a message you just sent: always jump
+    history.push({ role: "user", content: text });
+    saveCurrent();                       // auto-save: no manual save button
+
+    await runPrimaryTurn();
+  }
+
+  // Sends the full history to the primary model and streams its reply.
+  // opts.rebuttal marks the reply visually as a rebuttal.
+  async function runPrimaryTurn(opts = {}) {
+    setBusy(true);
+    const model = primary;                       // pin the role for this turn
+    const kind = opts.rebuttal ? "rebuttal" : "plain";
+    const payload = {
+      provider: MODELS[model].provider,
+      mode: opts.rebuttal ? "rebuttal" : "chat",
+      messages: history,
+    };
+
+    // The bubble appears immediately with a caret and fills in as text
+    // arrives — no blank wait.
+    const rec = addMessage({
+      role: "assistant",
+      text: "",
+      model,
+      kind,
+      streaming: true,
+    });
+    scrollDownForce();
+
+    const out = await streamText(rec, rec.el.querySelector(".bubble"),
+                                 payload, "chat", () => chatScroller.tick());
+    rec.streaming = false;
+
+    // --- Nothing streamed: fall back to the original blocking request ---
+    if (!out.started) {
+      removeMessage(rec);
+      // The server may have answered with plain JSON (e.g. a missing key);
+      // if so it's already the complete reply and needs no second request.
+      let data = out.json;
+      if (!data) {
+        const typing = showTyping(model);
+        data = await callApi(payload).catch(() => ({ error: "network" }));
+        typing.remove();
+      }
+      if (data.error) {
+        handleError(data, model);
+        setBusy(false);
+        return;
+      }
+      history.push({ role: "assistant", content: data.text });
+      addMessage({
+        role: "assistant",
+        text: data.text,
+        model,
+        kind,
+        truncated: !!data.truncated,
+      });
+      setBusy(false);
+      saveCurrent();
+      return;
+    }
+
+    // --- Streamed (possibly stopped, or failed part-way) ---------------
+    rec.truncated = out.truncated;
+    rec.stopped = !!out.aborted;
+    if (out.errorMessage) handleError({ message: out.errorMessage }, model);
+
+    // Stopped or failed before a single character: leave no empty bubble.
+    if (!rec.text) {
+      removeMessage(rec);
+      setBusy(false);
+      return;
+    }
+
+    // history first, so the final render can decide whether to offer
+    // "Continue" (see canContinue).
+    history.push({ role: "assistant", content: rec.text });
+    refreshMessage(rec);          // final full render + copy buttons + notes
+    setBusy(false);
+    saveCurrent();                // save once, complete — not per chunk
+  }
+
+  // =====================================================================
+  //  Continuing a cut-off reply
+  // =====================================================================
+
+  // The exact instruction the model gets when resuming.
+  const CONTINUE_PROMPT =
+    "Continue exactly where you left off. Do not repeat anything.";
+
+  // Resuming only works when this record IS the model's latest turn — the
+  // tail of `history` — because that history is what we send back.
+  // (An in-thread CRITIQUE never sits in `history`; it's a transcript of what
+  // was already sent back, so it shows the notice without a Continue button.
+  // The panel's own critique card has its own Continue — see below.)
+  function canContinue(rec) {
+    if (rec.role !== "assistant" || rec.kind === "critique") return false;
+    if (rec.streaming) return false;              // still arriving
+    const tail = history[history.length - 1];
+    return !!tail && tail.role === "assistant" && tail.content === rec.text;
+  }
+
+  // Send the conversation back to the SAME model and stream its continuation
+  // into this message, instead of starting a new bubble.
+  async function continueMessage(rec, btn) {
+    if (!canContinue(rec)) return;
+
+    hideBanner();
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = ICON_CONTINUE + "<span>Continuing…</span>";
+    }
+    setBusy(true);
+
+    const base = rec.text;               // what we already have
+
+    // The partial reply is already the last assistant turn; add the nudge.
+    history.push({ role: "user", content: CONTINUE_PROMPT });
+
+    // mode "chat" on purpose: we want a plain continuation, not the critique
+    // or rebuttal framing, whatever the original turn was.
+    const payload = {
+      provider: MODELS[rec.model].provider,
+      mode: "chat",
+      messages: history,
+    };
+
+    // Stream straight into the existing bubble — rec.text starts at `base`,
+    // so the caret picks up exactly where the reply stopped.
+    rec.streaming = true;
+    rec.stopped = false;
+    refreshMessage(rec);
+    const out = await streamText(rec, rec.el.querySelector(".bubble"),
+                                 payload, "chat", () => chatScroller.tick());
+    rec.streaming = false;
+
+    if (!out.started) {
+      // Fall back to the blocking request. The nudge is still in `history`,
+      // which is what this call needs to send.
+      let data = out.json;
+      if (!data) data = await callApi(payload).catch(() => ({ error: "network" }));
+      history.pop();                     // drop the nudge
+      if (data.error) {
+        handleError(data, rec.model);
+        setBusy(false);
+        refreshMessage(rec);             // restores the idle Continue button
+        return;
+      }
+      rec.text = base + data.text;
+      rec.truncated = !!data.truncated;
+    } else {
+      history.pop();                     // drop the nudge
+      rec.truncated = out.truncated;
+      rec.stopped = !!out.aborted;
+      if (out.errorMessage) handleError({ message: out.errorMessage }, rec.model);
+    }
+
+    // Collapse the two API turns back into one assistant turn, so the
+    // conversation reads as a single reply from here on.
+    history[history.length - 1] = { role: "assistant", content: rec.text };
+
+    refreshMessage(rec);                 // final render + buttons back
+    setBusy(false);
+    saveCurrent();
+    scrollDown();
+  }
+
+  // --- Critique (whole message OR a selection) -----------------------
+  // The user's most recent question gives the critic context.
+  function lastUserQuestion() {
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role === "user") return history[i].content;
+    }
+    return "";
+  }
+
+  async function critiqueMessage(fullText) {
+    // Guarded here as well as on the button, so the selection shortcut and
+    // any future caller get the same treatment.
+    if (!hasKey(critic)) {
+      openSettings(critic);
+      return;
+    }
+    await runCritique(fullText, lastUserQuestion());
+  }
+
+  // Shared critique runner. The critique ARRIVES in the right-hand panel,
+  // streaming in the same way as a chat reply; "Send back" is what promotes
+  // it into the main thread.
+  async function runCritique(targetText, question) {
+    hideBanner();
+    openPanel();
+    $("send-back").disabled = true;
+
+    const criticAtRequest = critic;   // pin the role for this request
+    const payload = {
+      provider: MODELS[criticAtRequest].provider,
+      mode: "critique",
+      question: question,
+      targetText: targetText,
+    };
+
+    // Build the panel shell up front: the excerpt being reviewed, then an
+    // empty card the critique streams into.
+    const ctx = document.createElement("div");
+    ctx.className = "critique-context";
+    ctx.innerHTML = `<b>Reviewing:</b> ` + escapeHtml(truncate(targetText, 220));
+
+    const card = document.createElement("div");
+    card.className = "critique-card";
+
+    const bodyEl = $("panel-body");
+    bodyEl.innerHTML = "";
+    bodyEl.appendChild(ctx);
+    bodyEl.appendChild(card);
+    panelScroller.reset();
+
+    // streamText mutates .text on this object as chunks arrive.
+    lastCritique = {
+      text: "",
+      sourceQuestion: question,
+      criticModel: criticAtRequest,
+      truncated: false,
+      stopped: false,
+    };
+
+    const out = await streamText(lastCritique, card, payload, "panel",
+                                 () => panelScroller.tick());
+
+    // --- Nothing streamed: fall back to the blocking request -----------
+    if (!out.started) {
+      let data = out.json;
+      if (!data) {
+        card.innerHTML =
+          '<div class="typing"><span></span><span></span><span></span></div>';
+        data = await callApi(payload).catch(() => ({ error: "network" }));
+      }
+      if (data.error) {
+        // Show the friendly error inside the panel.
+        card.textContent = errorText(data, criticAtRequest);
+        return;
+      }
+      lastCritique.text = data.text;
+      lastCritique.truncated = !!data.truncated;
+    } else {
+      lastCritique.truncated = out.truncated;
+      lastCritique.stopped = !!out.aborted;
+      if (out.errorMessage) {
+        // Mid-stream failure: keep what arrived, say what happened.
+        handleError({ message: out.errorMessage }, criticAtRequest);
+      }
+    }
+
+    // Nothing at all came back (stopped immediately, or an empty reply).
+    if (!lastCritique.text) {
+      card.textContent = lastCritique.stopped
+        ? "Stopped before the review started."
+        : "The reviewer returned nothing. Try again.";
+      return;
+    }
+
+    // Final full render — this is the pass that attaches the per-code-block
+    // copy buttons.
+    renderMarkdownInto(card, lastCritique.text);
+
+    // A cut-off or stopped critique gets the same notice as an in-thread
+    // message.
+    if (lastCritique.truncated || lastCritique.stopped) {
+      bodyEl.appendChild(makeCutoffNote(lastCritique));
+    }
+
+    // Copy reads lastCritique.text at click time, so it picks up anything
+    // the panel's Continue appended.
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    if (lastCritique.truncated || lastCritique.stopped) {
+      actions.appendChild(
+        makePanelContinueButton(card, criticAtRequest, question, targetText)
+      );
+    }
+    actions.appendChild(makeCopyButton(() => lastCritique.text));
+    bodyEl.appendChild(actions);
+
+    $("send-back").disabled = false;
+  }
+
+  // Continue for the critique living in the panel. A critique isn't part of
+  // `history` (it's a one-shot call), so we rebuild its own little
+  // conversation: the review request, the partial answer, then the nudge.
+  // The continuation is appended into the same card and into
+  // lastCritique.text, so "Send back" carries the FULL critique.
+  function makePanelContinueButton(card, criticModel, question, targetText) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "act-btn continue-btn";
+    btn.innerHTML = ICON_CONTINUE + "<span>Continue</span>";
+
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.innerHTML = ICON_CONTINUE + "<span>Continuing…</span>";
+
+      // Mirrors the wording the server uses to build a critique request, so
+      // the model sees the same context it saw the first time.
+      const ctxLine = question
+        ? 'The user originally asked:\n"""' + question + '"""\n\n'
+        : "";
+      const seed = [
+        {
+          role: "user",
+          content:
+            ctxLine +
+            'Here is the other assistant\'s answer to review:\n"""' +
+            (targetText || "") +
+            '"""',
+        },
+        { role: "assistant", content: lastCritique.text },
+        { role: "user", content: CONTINUE_PROMPT },
+      ];
+
+      // mode "chat": a plain continuation of the text already produced.
+      const payload = { provider: MODELS[criticModel].provider, mode: "chat", messages: seed };
+
+      // Streams into the same card; lastCritique.text grows as it arrives.
+      const out = await streamText(lastCritique, card, payload, "panel",
+                                   () => panelScroller.tick());
+
+      if (!out.started) {
+        let data = out.json;
+        if (!data) data = await callApi(payload).catch(() => ({ error: "network" }));
+        if (data.error) {
+          btn.disabled = false;
+          btn.innerHTML = ICON_CONTINUE + "<span>Continue</span>";
+          renderMarkdownInto(card, lastCritique.text);
+          handleError(data, criticModel);
+          return;
+        }
+        lastCritique.text = lastCritique.text + data.text;
+        lastCritique.truncated = !!data.truncated;
+      } else {
+        lastCritique.truncated = out.truncated;
+        lastCritique.stopped = !!out.aborted;
+        if (out.errorMessage) handleError({ message: out.errorMessage }, criticModel);
+      }
+
+      renderMarkdownInto(card, lastCritique.text);   // final render + code buttons
+
+      // Still unfinished? keep the button live. Otherwise retire it + the notice.
+      if (lastCritique.truncated || lastCritique.stopped) {
+        btn.disabled = false;
+        btn.innerHTML = ICON_CONTINUE + "<span>Continue</span>";
+      } else {
+        const note = $("panel-body").querySelector(".cutoff-note");
+        if (note) note.remove();
+        btn.remove();
+      }
+    };
+    return btn;
+  }
+
+  // --- Send critique back to the primary model -----------------------
+  async function sendBack() {
+    if (!lastCritique.text) return;
+    closePanel();
+
+    // Promote the critique into the main thread as its own message, attributed
+    // to the critic model, so the chat reads as the two models talking:
+    //   [you] question -> [primary] answer -> [critic] critique -> [primary] rebuttal
+    addMessage({
+      role: "assistant",
+      text: lastCritique.text,
+      model: lastCritique.criticModel || critic,
+      kind: "critique",
+      truncated: !!lastCritique.truncated,
+    });
+
+    // Feed the critique into the main chat as a new user turn, framed so the
+    // primary model knows to respond to a review of its own answer.
+    // (This framing is plumbing — it's never rendered as a user bubble.)
+    const framed =
+      `A reviewer gave this critique of your previous answer:\n\n` +
+      `"""${lastCritique.text}"""\n\n` +
+      `Please respond to it.`;
+    history.push({ role: "user", content: framed });
+
+    await runPrimaryTurn({ rebuttal: true });
+  }
+
+  // --- Text-selection → floating critique button ---------------------
+  document.addEventListener("mouseup", () => {
+    // Small delay so the selection is finalised.
+    setTimeout(handleSelection, 10);
+  });
+  document.addEventListener("scroll", hideFloat, true);
+
+  function handleSelection() {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().trim() : "";
+    if (!text || text.length < 3) { hideFloat(); return; }
+
+    // Only offer it when the selection is inside an assistant bubble.
+    // Rendered markdown nests elements, so start from the node itself when
+    // the anchor is already an element rather than a text node.
+    const anchor = sel.anchorNode;
+    const start = !anchor
+      ? null
+      : anchor.nodeType === Node.TEXT_NODE
+      ? anchor.parentElement
+      : anchor;
+    const bubble = start ? start.closest(".msg.assistant .bubble") : null;
+    if (!bubble) { hideFloat(); return; }
+
+    pendingSelection = { text, question: lastUserQuestion() };
+
+    // Position the button just above the selection.
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const f = $("float");
+    // Clamp so the button itself can never sit outside the viewport.
+    const left = Math.min(
+      Math.max(10, rect.left + rect.width / 2 - 80),
+      Math.max(10, window.innerWidth - 190)
+    );
+    f.style.left = left + "px";
+    f.style.top = Math.max(8, rect.top - 46) + "px";
+    f.classList.add("show");
+  }
+
+  function hideFloat() { $("float").classList.remove("show"); }
+
+  // mousedown (not click) so it fires before the selection is cleared.
+  function onFloatClick(e) {
+    e.preventDefault();
+    hideFloat();
+    if (pendingSelection.text) {
+      runCritique(pendingSelection.text, pendingSelection.question);
+    }
+  }
+
+  // --- Panel open/close ---------------------------------------------
+  // The open class lives on .main because it drives the grid column width
+  // (desktop) and the sheet transform (narrow screens).
+  function openPanel() {
+    // On a tight desktop width, both side columns at once would squeeze the
+    // chat, so the sidebar yields to the panel. (Below 900px the sidebar is
+    // an overlay drawer and doesn't take space at all.)
+    if (!isNarrowLayout() && window.innerWidth < 1200) collapseSidebar();
+    $("main").classList.add("panel-open");
+  }
+  function closePanel() { $("main").classList.remove("panel-open"); }
+
+  // --- Busy state ----------------------------------------------------
+  // The composer input is disabled during a turn, but the button is not:
+  // while a stream runs it IS the Stop button (see applySendButton).
+  let busyState = false;
+  function setBusy(busy) {
+    busyState = busy;
+    $("input").disabled = busy;
+    applySendButton();
+  }
+
+  // --- Friendly error handling --------------------------------------
+  // Build the human message for an error payload.
+  function errorText(data, model) {
+    const name = MODELS[model].name;
+    if (data.error === "missing_key") {
+      return `${name} isn't connected — add your ${MODELS[model].keyName} API key in Settings to start chatting.`;
+    }
+    if (data.error === "network") {
+      return `Couldn't reach the server. Check your connection and try again.`;
+    }
+    if (data.message) return data.message; // provider_error / bad_request
+    return `Something went wrong with ${name}. Please try again.`;
+  }
+
+  // Show a missing-key / provider error as a calm banner in the chat column.
+  function handleError(data, model) {
+    const m = MODELS[model];
+    const b = $("banner");
+    b.innerHTML = `<span class="badge sm ${m.cls}">${m.letter}</span>`;
+    const msg = document.createElement("span");
+    msg.textContent = errorText(data, model);   // provider text: never HTML
+    b.appendChild(msg);
+    b.classList.remove("hidden");
+    scrollDown();
+  }
+  function hideBanner() { $("banner").classList.add("hidden"); }
+
+  // --- Small utilities ----------------------------------------------
+  function truncate(s, n) { return s.length > n ? s.slice(0, n) + "…" : s; }
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  // =====================================================================
+  //  API keys — bring your own, stored in this browser only.
+  //
+  //  These are the user's OWN provider keys. They live in localStorage on
+  //  this device, are attached to each request as the `x-provider-key`
+  //  header, and are used by the Worker for that single upstream call.
+  //  The server stores nothing (see functions/api/chat.js).
+  //
+  //  Stored shape:  { version, anthropic, openai }
+  //  Kept in its own localStorage entry, separate from conversation history,
+  //  so "remove my keys" and "clear my chats" stay independent operations.
+  // =====================================================================
+
+  const KEYS_STORE_KEY = "aivsai.keys";
+  const KEYS_SCHEMA_VERSION = 1;
+
+  // provider id -> the key the user pasted. Empty string means "not connected".
+  let apiKeys = { anthropic: "", openai: "" };
+
+  // Expected prefixes. Used for a GENTLE warning only — providers do change
+  // key formats, so this must never block saving.
+  const KEY_HINTS = {
+    anthropic: { prefix: "sk-ant-", label: "Anthropic keys usually start with sk-ant-" },
+    openai: { prefix: "sk-", label: "OpenAI keys usually start with sk-" },
+  };
+
+  // Defensive read: anything unreadable degrades to "no keys stored".
+  function loadKeys() {
+    try {
+      const raw = localStorage.getItem(KEYS_STORE_KEY);
+      if (!raw) return { anthropic: "", openai: "" };
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return { anthropic: "", openai: "" };
+      if (parsed.version !== KEYS_SCHEMA_VERSION) {
+        console.warn("Stored keys use an unknown schema version — ignoring them.");
+        return { anthropic: "", openai: "" };
+      }
+      return {
+        anthropic: typeof parsed.anthropic === "string" ? parsed.anthropic : "",
+        openai: typeof parsed.openai === "string" ? parsed.openai : "",
+      };
+    } catch (err) {
+      console.warn("Stored keys could not be read — treating as not connected.", err);
+      return { anthropic: "", openai: "" };
+    }
+  }
+
+  function writeKeys() {
+    try {
+      localStorage.setItem(
+        KEYS_STORE_KEY,
+        JSON.stringify({
+          version: KEYS_SCHEMA_VERSION,
+          anthropic: apiKeys.anthropic,
+          openai: apiKeys.openai,
+        })
+      );
+      return true;
+    } catch (err) {
+      console.warn("Could not save keys to this browser.", err);
+      return false;
+    }
+  }
+
+  // Is this model usable right now?
+  function hasKey(model) {
+    return !!apiKeys[MODELS[model].provider];
+  }
+  function anyKey() {
+    return !!(apiKeys.anthropic || apiKeys.openai);
+  }
+
+  // Headers for a provider call. The key rides in a header rather than the
+  // JSON body so it never lands in a body log on either side.
+  function providerHeaders(provider, overrideKey) {
+    const headers = { "content-type": "application/json" };
+    const key = overrideKey !== undefined ? overrideKey : apiKeys[provider];
+    if (key) headers["x-provider-key"] = key;
+    return headers;
+  }
+
+  // --- Connection status in the header --------------------------------
+  function renderConnectionStatus() {
+    const wrap = $("conn");
+    wrap.innerHTML = "";
+    ["claude", "chatgpt"].forEach((id) => {
+      const m = MODELS[id];
+      const connected = hasKey(id);
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "conn-chip" + (connected ? " on" : "");
+      chip.title = connected
+        ? `${m.name} is connected — open Settings to manage the key`
+        : `${m.name} is not connected — add your ${m.keyName} key in Settings`;
+      chip.onclick = () => openSettings(id);
+      chip.innerHTML =
+        `<span class="badge sm ${m.cls}">${m.letter}</span>` +
+        `<span class="conn-dot"></span>` +
+        `<span class="conn-text">${connected ? "Connected" : "Not connected"}</span>`;
+      wrap.appendChild(chip);
+
+      // Mirrored onto the toggle button too: below 560px the chips are hidden
+      // and the toggle carries the status dot instead (see the media query),
+      // so the header still fits without losing the information.
+      const toggleBtn = document.querySelector(`#toggle button[data-model="${id}"]`);
+      if (toggleBtn) {
+        toggleBtn.dataset.connected = connected ? "true" : "false";
+        toggleBtn.title = connected
+          ? `${m.name} is connected`
+          : `${m.name} is not connected — add your ${m.keyName} key in Settings`;
+      }
+    });
+  }
+
+  // Why the second-opinion button is (or isn't) usable right now.
+  function criticGateReason() {
+    return `${MODELS[critic].name} isn't connected — add your ` +
+           `${MODELS[critic].keyName} key in Settings to get a second opinion.`;
+  }
+
+  // Apply that state to a single button.
+  function setCriticButtonState(btn) {
+    const ok = hasKey(critic);
+    btn.disabled = !ok;
+    btn.title = ok
+      ? `Ask ${MODELS[critic].name} to review this answer`
+      : criticGateReason();
+  }
+
+  // The critic button is only usable when the OTHER model is connected;
+  // disable it up front rather than failing after a click. Called whenever
+  // keys or roles change, to catch buttons that already exist.
+  function applyCriticAvailability() {
+    document.querySelectorAll(".second-opinion").forEach(setCriticButtonState);
+    const float = $("float");
+    const ok = hasKey(critic);
+    float.disabled = !ok;
+    float.title = ok ? "" : criticGateReason();
+  }
+
+  // =====================================================================
+  //  Settings modal — where the user manages their own keys.
+  // =====================================================================
+
+  // The setup steps and privacy notice are shared with the welcome screen,
+  // so they're built once and dropped into the modal here.
+  function mountSettingsContent() {
+    const guides = $("settings-guides");
+    const privacy = $("settings-privacy");
+    if (!guides.childElementCount) guides.appendChild(buildSetupGuides());
+    if (!privacy.childElementCount) privacy.appendChild(buildPrivacyNotice());
+  }
+
+  // Which model's field to focus when the modal opens (optional).
+  function openSettings(focusModel) {
+    mountSettingsContent();
+    // Fill the fields from storage every time it opens, so the modal always
+    // reflects what is actually saved.
+    ["claude", "chatgpt"].forEach((id) => {
+      const provider = MODELS[id].provider;
+      const input = $(`key-input-${id}`);
+      input.value = apiKeys[provider] || "";
+      input.type = "password";                       // always re-mask on open
+      $(`key-eye-${id}`).textContent = "Show";
+      setKeyStatus(id, "");
+      renderKeyRowState(id);
+    });
+
+    $("settings").classList.add("open");
+    document.body.classList.add("modal-open");
+
+    const first = focusModel || (hasKey("claude") ? "chatgpt" : "claude");
+    const input = $(`key-input-${first}`);
+    if (input) setTimeout(() => input.focus(), 60);
+  }
+
+  function closeSettings() {
+    $("settings").classList.remove("open");
+    document.body.classList.remove("modal-open");
+    // Never leave a key visible behind the modal.
+    ["claude", "chatgpt"].forEach((id) => {
+      $(`key-input-${id}`).type = "password";
+      $(`key-eye-${id}`).textContent = "Show";
+    });
+  }
+
+  // Clicking the backdrop (but not the dialog) closes it.
+  function onSettingsScrim(e) {
+    if (e.target === $("settings")) closeSettings();
+  }
+
+  // Masked by default; the toggle reveals the field so a paste can be checked.
+  function toggleKeyVisibility(id) {
+    const input = $(`key-input-${id}`);
+    const btn = $(`key-eye-${id}`);
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    btn.textContent = show ? "Hide" : "Show";
+  }
+
+  // Save whatever is currently in the field for this model.
+  function saveKey(id) {
+    const provider = MODELS[id].provider;
+    const value = $(`key-input-${id}`).value.trim();
+
+    if (!value) {
+      setKeyStatus(id, "Nothing to save — paste a key first.", "warn");
+      return;
+    }
+
+    apiKeys[provider] = value;
+    const ok = writeKeys();
+
+    // Format check is advisory only: prefixes change over time, so a
+    // surprising-looking key is still saved, just flagged.
+    const hint = KEY_HINTS[provider];
+    if (!value.startsWith(hint.prefix)) {
+      setKeyStatus(
+        id,
+        ok
+          ? `Saved. Heads up: ${hint.label} — double-check you pasted the right one.`
+          : `${hint.label}. Also, this browser refused to store it.`,
+        "warn"
+      );
+    } else {
+      setKeyStatus(
+        id,
+        ok ? "Saved in this browser." : "Couldn't store the key in this browser.",
+        ok ? "ok" : "err"
+      );
+    }
+
+    refreshKeyDependentUI();
+    renderKeyRowState(id);
+  }
+
+  // Forget a key entirely.
+  function removeKey(id) {
+    const provider = MODELS[id].provider;
+    if (!apiKeys[provider] && !$(`key-input-${id}`).value) {
+      setKeyStatus(id, "No key stored for this model.", "warn");
+      return;
+    }
+    if (!confirm(`Remove your ${MODELS[id].keyName} key from this browser?`)) return;
+
+    apiKeys[provider] = "";
+    $(`key-input-${id}`).value = "";
+    writeKeys();
+    setKeyStatus(id, "Removed from this browser.", "ok");
+    refreshKeyDependentUI();
+    renderKeyRowState(id);
+  }
+
+  // One minimal call to prove the key works. Tests the value in the FIELD, so
+  // a key can be checked before it is saved.
+  async function testKey(id) {
+    const provider = MODELS[id].provider;
+    const value = $(`key-input-${id}`).value.trim() || apiKeys[provider];
+    if (!value) {
+      setKeyStatus(id, "Paste a key first.", "warn");
+      return;
+    }
+
+    const btn = $(`key-test-${id}`);
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Testing…";
+    setKeyStatus(id, "Checking with " + MODELS[id].name + "…");
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: providerHeaders(provider, value),
+        body: JSON.stringify({
+          provider,
+          mode: "chat",
+          messages: [{ role: "user", content: "Reply with just: ok" }],
+        }),
+      });
+      const data = await res.json().catch(() => null);
+
+      if (!data) {
+        setKeyStatus(id, "The server sent back something unreadable. Try again.", "err");
+      } else if (data.error === "missing_key") {
+        setKeyStatus(id, "The key didn't reach the server. Try again.", "err");
+      } else if (data.error) {
+        // errorText() carries the provider's own friendly mapping, including
+        // "That key was rejected — check it's correct and active."
+        setKeyStatus(id, errorText(data, id), "err");
+      } else {
+        setKeyStatus(id, `Works — ${MODELS[id].name} answered.`, "ok");
+      }
+    } catch (err) {
+      setKeyStatus(id, "Couldn't reach the server. Check your connection.", "err");
+    }
+
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+
+  // Status line under one key field.
+  function setKeyStatus(id, message, kind) {
+    const el = $(`key-status-${id}`);
+    el.textContent = message || "";
+    el.className = "key-status" + (kind ? " " + kind : "");
+  }
+
+  // "Connected / not connected" badge on the row itself.
+  function renderKeyRowState(id) {
+    const el = $(`key-state-${id}`);
+    const connected = hasKey(id);
+    el.textContent = connected ? "Connected" : "Not connected";
+    el.className = "key-state" + (connected ? " on" : "");
+  }
+
+  // Everything that changes when a key appears or disappears.
+  function refreshKeyDependentUI() {
+    renderConnectionStatus();
+    applyCriticAvailability();
+    // The welcome screen only shows while no key is stored.
+    if (!messages.length) resetMessagesEmptyState();
+  }
+
+  // Keys AND conversations, in one deliberate step.
+  function clearAllMyData() {
+    const ok = confirm(
+      "Remove your API keys and delete every saved conversation from this browser?\n\n" +
+      "This can't be undone. Your keys stay valid at Anthropic and OpenAI — " +
+      "revoke them there if you want them dead."
+    );
+    if (!ok) return;
+
+    apiKeys = { anthropic: "", openai: "" };
+    conversations = [];
+    try {
+      localStorage.removeItem(KEYS_STORE_KEY);
+      localStorage.removeItem(STORE_KEY);
+    } catch (err) {
+      console.warn("Could not clear stored data.", err);
+    }
+
+    ["claude", "chatgpt"].forEach((id) => {
+      $(`key-input-${id}`).value = "";
+      setKeyStatus(id, "");
+      renderKeyRowState(id);
+    });
+
+    resetConversationState();
+    renderSidebar();
+    refreshKeyDependentUI();
+    closeSettings();
+  }
+
+  // =====================================================================
+  //  Privacy notice + setup instructions
+  //  Built in JS because they appear in two places (settings and welcome).
+  //  Deliberately specific — this is what actually happens, not reassurance.
+  // =====================================================================
+  const PRIVACY_POINTS = [
+    "Your keys are stored in this browser's local storage, on your device. They are never saved on our server and never sent anywhere except to Anthropic and OpenAI to answer your messages.",
+    "Requests pass through this app's server, which forwards them to the providers and keeps nothing. The source code is public so you can verify this.",
+    "Anyone with access to this browser profile could read the stored keys. Don't use this on a shared or public computer.",
+    "You can remove your keys at any time in Settings.",
+    "Set a spending limit in your provider dashboard, and revoke the key there if you ever suspect it's been exposed.",
+  ];
+
+  function buildPrivacyNotice() {
+    const box = document.createElement("div");
+    box.className = "privacy";
+
+    const h = document.createElement("h3");
+    h.textContent = "Where your keys go";
+    box.appendChild(h);
+
+    const ul = document.createElement("ul");
+    PRIVACY_POINTS.forEach((point) => {
+      const li = document.createElement("li");
+      li.textContent = point;
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+    return box;
+  }
+
+  // Step-by-step setup, one block per provider.
+  const SETUP_GUIDES = [
+    {
+      model: "claude",
+      title: "Getting your Claude (Anthropic) key",
+      link: { href: "https://console.anthropic.com", text: "console.anthropic.com" },
+      steps: [
+        ["Go to ", "LINK", " and sign in or create an account"],
+        ["Add billing — API usage is pay-as-you-go and separate from any Claude.ai subscription"],
+        ["Open API Keys in the sidebar, click Create Key, copy it"],
+        ["It starts with sk-ant- and is shown only once — copy it before closing"],
+      ],
+    },
+    {
+      model: "chatgpt",
+      title: "Getting your ChatGPT (OpenAI) key",
+      link: { href: "https://platform.openai.com", text: "platform.openai.com" },
+      steps: [
+        ["Go to ", "LINK", " and sign in or create an account"],
+        ["Add billing under Settings → Billing — an API account is separate from ChatGPT Plus"],
+        ["Open API keys, click Create new secret key, copy it"],
+        ["It starts with sk- and is shown only once"],
+      ],
+    },
+  ];
+
+  function buildSetupGuides() {
+    const wrap = document.createElement("div");
+    wrap.className = "guides";
+
+    SETUP_GUIDES.forEach((guide) => {
+      const m = MODELS[guide.model];
+      const sec = document.createElement("section");
+      sec.className = "guide";
+
+      const h = document.createElement("h3");
+      h.innerHTML = `<span class="badge sm ${m.cls}">${m.letter}</span>`;
+      h.appendChild(document.createTextNode(" " + guide.title));
+      sec.appendChild(h);
+
+      const ol = document.createElement("ol");
+      guide.steps.forEach((parts) => {
+        const li = document.createElement("li");
+        parts.forEach((part) => {
+          if (part === "LINK") {
+            const a = document.createElement("a");
+            a.href = guide.link.href;
+            a.textContent = guide.link.text;
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";     // never expose window.opener
+            li.appendChild(a);
+          } else {
+            li.appendChild(document.createTextNode(part));
+          }
+        });
+        ol.appendChild(li);
+      });
+      sec.appendChild(ol);
+      wrap.appendChild(sec);
+    });
+
+    const note = document.createElement("p");
+    note.className = "guides-note";
+    note.textContent =
+      "API usage is billed per message by each provider, typically fractions of a cent " +
+      "per exchange, and both dashboards let you set spending limits.";
+    wrap.appendChild(note);
+
+    return wrap;
+  }
+
+  // =====================================================================
+  //  Welcome screen — first visit, before any key is stored.
+  // =====================================================================
+  function buildWelcome() {
+    const wrap = document.createElement("div");
+    wrap.className = "welcome";
+    wrap.id = "empty";                 // clearEmpty() removes it on first message
+
+    const h = document.createElement("h2");
+    h.textContent = "Two minds, one question.";
+    wrap.appendChild(h);
+
+    const how = document.createElement("p");
+    how.className = "how";
+    how.textContent =
+      "How it works: one AI answers, the other critiques it, and you decide who's right.";
+    wrap.appendChild(how);
+
+    const lead = document.createElement("p");
+    lead.className = "lead";
+    lead.textContent =
+      "This app has no API keys of its own — you connect your own, so you're billed " +
+      "directly by the providers and nobody else can spend your credit. One key is " +
+      "enough to start chatting; connect both to use second opinions.";
+    wrap.appendChild(lead);
+
+    const cta = document.createElement("button");
+    cta.type = "button";
+    cta.className = "welcome-cta";
+    cta.textContent = "Add your API keys";
+    cta.onclick = () => openSettings();
+    wrap.appendChild(cta);
+
+    wrap.appendChild(buildSetupGuides());
+    wrap.appendChild(buildPrivacyNotice());
+    return wrap;
+  }
+
+  // =====================================================================
+  //  Streaming
+  //
+  //  The server normalizes both providers into one event vocabulary, so
+  //  there is exactly one shape to handle here:
+  //    { type: "delta", text }      append this chunk
+  //    { type: "done",  truncated } finished
+  //    { type: "error", message }   friendly message, already safe to show
+  //
+  //  If a stream can't be established, callers fall back to the original
+  //  blocking request — see runPrimaryTurn / runCritique.
+  // =====================================================================
+
+  // Re-parse the markdown at most this often while text is arriving.
+  // Low enough to feel live, high enough not to thrash the DOM on a long
+  // reply (a 4000-word answer would otherwise re-parse hundreds of times).
+  const STREAM_RENDER_MS = 80;
+
+  // The stream in flight, if any: { controller, source: "chat" | "panel" }.
+  let activeStream = null;
+
+  // --- Reading the normalized SSE stream -----------------------------
+  // Returns { started, aborted, json, failed }:
+  //   started — at least one normalized event arrived, so the caller should
+  //             NOT retry with the blocking path
+  //   json    — the server answered with ordinary JSON instead of a stream
+  //             (a missing key, say); hand it back rather than re-requesting
+  async function openStream(payload, { onDelta, onDone, onError, signal }) {
+    let res;
+    try {
+      res = await fetch("/api/chat", {
+        method: "POST",
+        headers: providerHeaders(payload.provider),
+        body: JSON.stringify({ ...payload, stream: true }),
+        signal,
+      });
+    } catch (err) {
+      // Aborted before the response, or the network refused it.
+      return { started: false, aborted: err && err.name === "AbortError" };
+    }
+
+    const ctype = res.headers.get("content-type") || "";
+
+    // Not a stream: either an error payload or a server that declined to
+    // stream. Either way the body is the complete answer.
+    if (!res.ok || !res.body || !ctype.includes("text/event-stream")) {
+      const json = await res.json().catch(() => null);
+      return { started: false, json };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let started = false;
+
+    // Hand one parsed event to the right callback.
+    const dispatch = (evt) => {
+      if (!evt || typeof evt !== "object") return;
+      started = true;
+      if (evt.type === "delta" && typeof evt.text === "string") onDelta(evt.text);
+      else if (evt.type === "done") onDone(!!evt.truncated);
+      else if (evt.type === "error") onError(evt.message || "Something went wrong.");
+    };
+
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // A chunk can land mid-event, so buffer and only consume complete
+        // events (terminated by a blank line).
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+        let i;
+        while ((i = buffer.indexOf("\n\n")) !== -1) {
+          const block = buffer.slice(0, i);
+          buffer = buffer.slice(i + 2);
+          dispatch(parseSSEData(block));
+        }
+      }
+      if (buffer.trim()) dispatch(parseSSEData(buffer));
+    } catch (err) {
+      if (err && err.name === "AbortError") return { started, aborted: true };
+      return { started, failed: true };
+    }
+
+    return { started };
+  }
+
+  // Pull the JSON out of one SSE block's `data:` lines.
+  function parseSSEData(block) {
+    const lines = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith("data:")) {
+        let v = line.slice(5);
+        if (v.startsWith(" ")) v = v.slice(1);
+        lines.push(v);
+      }
+    }
+    if (!lines.length) return null;
+    try {
+      return JSON.parse(lines.join("\n"));
+    } catch {
+      return null;
+    }
+  }
+
+  // --- Throttled incremental rendering -------------------------------
+  // Paints the first chunk immediately (so text appears at once) and then at
+  // most once per STREAM_RENDER_MS. Every paint goes through DOMPurify —
+  // streaming does not relax sanitization.
+  function makePainter(el, getText, onPaint) {
+    let timer = null;
+    let pending = false;
+    let painted = false;
+
+    const paint = () => {
+      pending = false;
+      renderMarkdownInto(el, getText(), { streaming: true });
+      appendCursor(el);
+      if (onPaint) onPaint();
+    };
+
+    return {
+      schedule() {
+        pending = true;
+        if (!painted) { painted = true; paint(); return; }   // leading edge
+        if (timer) return;                                   // already queued
+        timer = setTimeout(() => {
+          timer = null;
+          if (pending) paint();
+        }, STREAM_RENDER_MS);
+      },
+      cancel() {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        pending = false;
+      },
+    };
+  }
+
+  // Blinking caret, parked at the end of the last line of text. Our own
+  // element, appended after sanitization — never part of model output.
+  function appendCursor(el) {
+    const cursor = document.createElement("span");
+    cursor.className = "stream-cursor";
+
+    // Walk to the last block so the caret sits with the text rather than
+    // on a line of its own. Never descend into a code block or table.
+    let host = el;
+    for (let depth = 0; depth < 6; depth++) {
+      const last = host.lastElementChild;
+      if (!last || ["PRE", "TABLE", "HR", "IMG", "CODE"].includes(last.tagName)) break;
+      host = last;
+    }
+    host.appendChild(cursor);
+  }
+
+  // --- Partial-markdown repair ---------------------------------------
+  // Mid-stream an unclosed ``` fence or a dangling ** is completely normal.
+  // Left alone, marked would either swallow the rest of the reply or print
+  // the raw asterisks. This closes what's open for the streaming render
+  // ONLY — the final render always uses the model's text verbatim.
+  function closeOpenMarkdown(src) {
+    // Drop a trailing partial marker: a "**" with nothing after it yet has
+    // nothing to emphasise, so showing it is just noise.
+    let out = src.replace(/(?:\*{1,2}|_{1,2}|~{1,2}|`{1,3})$/, "");
+
+    const parts = out.split("```");
+    const insideFence = parts.length % 2 === 0;   // odd number of fences
+
+    if (insideFence) {
+      out += "\n```";                              // close the open block
+      return out;
+    }
+
+    // Outside any fence: balance inline code and bold on the visible text.
+    const outside = parts.filter((_, i) => i % 2 === 0).join("");
+    if ((outside.match(/`/g) || []).length % 2 === 1) out += "`";
+    if ((outside.match(/\*\*/g) || []).length % 2 === 1) out += "**";
+    return out;
+  }
+
+  // --- Auto-scroll that yields to the reader --------------------------
+  // Follows new text, but the moment you scroll up to read something it
+  // stops; scrolling back to the bottom resumes it. Nothing yanks the view.
+  function makeAutoScroller(el) {
+    let follow = true;
+    el.addEventListener("scroll", () => {
+      follow = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    });
+    return {
+      tick() { if (follow) el.scrollTop = el.scrollHeight; },
+      reset() { follow = true; el.scrollTop = el.scrollHeight; },
+      get following() { return follow; },
+    };
+  }
+
+  const chatScroller = makeAutoScroller($("messages"));
+  const panelScroller = makeAutoScroller($("panel-body"));
+
+  // --- Stop button ----------------------------------------------------
+  // While a stream runs, Send becomes Stop (and, for a critique, so does the
+  // panel's button). Aborting keeps whatever text already arrived.
+  function beginStream(controller, source) {
+    activeStream = { controller, source };
+    applySendButton();
+    applyPanelButton();
+  }
+  function endStream() {
+    activeStream = null;
+    applySendButton();
+    applyPanelButton();
+  }
+  function stopStream() {
+    if (activeStream) activeStream.controller.abort();
+  }
+
+  // The composer button does double duty.
+  function onSendClick() {
+    if (activeStream && activeStream.source === "chat") stopStream();
+    else sendMessage();
+  }
+  // So does the panel's.
+  function onPanelClick() {
+    if (activeStream && activeStream.source === "panel") stopStream();
+    else sendBack();
+  }
+
+  function applySendButton() {
+    const btn = $("send");
+    if (activeStream && activeStream.source === "chat") {
+      btn.classList.add("stop");
+      btn.disabled = false;                    // Stop must stay clickable
+      btn.innerHTML = ICON_STOP + "<span>Stop</span>";
+    } else {
+      btn.classList.remove("stop");
+      btn.textContent = "Send";
+      btn.disabled = busyState;
+    }
+  }
+
+  function applyPanelButton() {
+    const btn = $("send-back");
+    const label = $("send-back-label");
+    if (activeStream && activeStream.source === "panel") {
+      btn.classList.add("stop");
+      btn.disabled = false;
+      label.textContent = "Stop";
+    } else {
+      btn.classList.remove("stop");
+      label.textContent = `Send back to ${MODELS[primary].name}`;
+    }
+  }
+
+  // --- The shared streaming driver ------------------------------------
+  // `store` is any object with a mutable `.text` string (a message record, or
+  // lastCritique); `el` is the element the markdown is painted into.
+  // Returns { started, aborted, json, failed, truncated, errorMessage }.
+  async function streamText(store, el, payload, source, onPaint) {
+    const controller = new AbortController();
+    const painter = makePainter(el, () => store.text, onPaint);
+    painter.schedule();                        // empty bubble + caret, at once
+
+    let truncated = false;
+    let errorMessage = null;
+
+    beginStream(controller, source);
+
+    const result = await openStream(payload, {
+      signal: controller.signal,
+      onDelta: (chunk) => {
+        store.text += chunk;
+        painter.schedule();
+      },
+      onDone: (tr) => { truncated = tr; },
+      onError: (msg) => { errorMessage = msg; },
+    });
+
+    painter.cancel();
+    endStream();
+
+    return { ...result, truncated, errorMessage };
+  }
+
+  // =====================================================================
+  //  Persistence — saved conversations in localStorage.
+  //
+  //  SECURITY: only conversation content is stored here. API keys never
+  //  reach the browser at all (they live in Cloudflare env vars and are used
+  //  server-side in functions/api/chat.js), so there is nothing key-shaped
+  //  to persist — and nothing here should ever change that.
+  //
+  //  Stored shape (one JSON blob under STORE_KEY):
+  //    { version, savedAt, conversations: [ {
+  //        id, title, titleCustom, createdAt, updatedAt,
+  //        primary, critic,
+  //        messages: [ { role, model, kind, text, truncated } ],  // render view
+  //        history:  [ { role, content } ]                        // API view
+  //      } ] }
+  //
+  //  Both views are kept: `messages` rebuilds the bubbles (model attribution,
+  //  CRITIQUE / REBUTTAL labels, cut-off notices), `history` is what the model
+  //  actually gets on the next turn — it includes the framed critique turn
+  //  that is deliberately never rendered.
+  // =====================================================================
+
+  const STORE_KEY = "aivsai.history";
+  const SCHEMA_VERSION = 1;
+
+  // localStorage is ~5MB, counted in UTF-16 code units in most browsers, so
+  // ~2.5M characters. Warn well before that.
+  const STORAGE_WARN_CHARS = 1800000;
+
+  let conversations = [];      // in-memory mirror of what's stored
+  let currentId = null;        // id of the conversation on screen (null = unsaved new chat)
+
+  // --- Read / write ---------------------------------------------------
+  // Every read is defensive: a missing key, malformed JSON, a future schema
+  // version or a browser that throws on localStorage access all degrade to
+  // "no saved chats" rather than a broken page.
+  function loadStore() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return [];
+      // Version gate. When the shape changes, migrate here instead of
+      // discarding — for now an unknown version is simply ignored.
+      if (parsed.version !== SCHEMA_VERSION) {
+        console.warn("Saved chats use schema v" + parsed.version + ", expected v" + SCHEMA_VERSION + " — ignoring them.");
+        return [];
+      }
+      if (!Array.isArray(parsed.conversations)) return [];
+      return parsed.conversations.filter(isValidConversation).map(normalizeConversation);
+    } catch (err) {
+      console.warn("Saved chats could not be read — starting with an empty list.", err);
+      return [];
+    }
+  }
+
+  function isValidConversation(c) {
+    return (
+      c && typeof c === "object" &&
+      typeof c.id === "string" &&
+      Array.isArray(c.messages) &&
+      Array.isArray(c.history) &&
+      !!MODELS[c.primary] && !!MODELS[c.critic]
+    );
+  }
+
+  // Coerce a stored conversation into exactly the fields we rely on, so a
+  // hand-edited or partially-written entry can't surprise the renderer.
+  function normalizeConversation(c) {
+    return {
+      id: c.id,
+      title: typeof c.title === "string" ? c.title : "",
+      titleCustom: !!c.titleCustom,
+      createdAt: Number(c.createdAt) || Date.now(),
+      updatedAt: Number(c.updatedAt) || Number(c.createdAt) || Date.now(),
+      primary: c.primary,
+      critic: c.critic,
+      messages: c.messages
+        .filter((m) => m && typeof m.text === "string" &&
+                       (m.role === "user" || m.role === "assistant"))
+        .map((m) => ({
+          role: m.role,
+          model: MODELS[m.model] ? m.model : null,
+          kind: ["plain", "critique", "rebuttal"].includes(m.kind) ? m.kind : "plain",
+          text: m.text,
+          truncated: !!m.truncated,
+          stopped: !!m.stopped,
+        })),
+      history: c.history
+        .filter((h) => h && typeof h.content === "string" &&
+                       (h.role === "user" || h.role === "assistant"))
+        .map((h) => ({ role: h.role, content: h.content })),
+    };
+  }
+
+  // Returns true on success. A failed write NEVER throws into the app — it
+  // just leaves a note in the sidebar.
+  function writeStore() {
+    let raw;
+    try {
+      raw = JSON.stringify({
+        version: SCHEMA_VERSION,
+        savedAt: Date.now(),
+        conversations,
+      });
+    } catch (err) {
+      console.warn("Could not serialise saved chats.", err);
+      return false;
+    }
+
+    try {
+      localStorage.setItem(STORE_KEY, raw);
+      showStorageNote(raw.length >= STORAGE_WARN_CHARS ? "nearly-full" : null);
+      return true;
+    } catch (err) {
+      // Quota exceeded, or storage blocked (private mode, disabled cookies).
+      console.warn("Saving chat history failed.", err);
+      showStorageNote("full");
+      return false;
+    }
+  }
+
+  // Gentle, never alarming.
+  function showStorageNote(kind) {
+    const el = $("storage-note");
+    if (!kind) { el.classList.add("hidden"); el.textContent = ""; return; }
+    el.textContent = kind === "full"
+      ? "This browser has no room left for saved chats, so the latest messages weren't saved. Deleting a few old conversations will free some up."
+      : "Saved chats are using most of the space this browser allows. Consider deleting a few old ones.";
+    el.classList.remove("hidden");
+  }
+
+  // --- Saving the open conversation ----------------------------------
+  // Called after every message, rename, and continuation. There is no
+  // manual save button by design.
+  function saveCurrent() {
+    if (!messages.length) return;            // nothing worth a slot yet
+
+    const now = Date.now();
+    let conv = conversations.find((c) => c.id === currentId);
+    if (!conv) {
+      currentId = currentId || newConversationId();
+      conv = {
+        id: currentId,
+        title: "",
+        titleCustom: false,
+        createdAt: now,
+      };
+      conversations.push(conv);
+    }
+
+    conv.updatedAt = now;
+    conv.primary = primary;                  // remembered per conversation
+    conv.critic = critic;
+    if (!conv.titleCustom) conv.title = autoTitle();
+
+    // Snapshot both views (plain objects only — no DOM nodes).
+    conv.messages = messages.map((m) => ({
+      role: m.role,
+      model: m.model,
+      kind: m.kind,
+      text: m.text,
+      truncated: !!m.truncated,
+      stopped: !!m.stopped,
+    }));
+    conv.history = history.map((h) => ({ role: h.role, content: h.content }));
+
+    writeStore();
+    renderSidebar();
+  }
+
+  function newConversationId() {
+    return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  }
+
+  // Title = first ~40 characters of the opening question.
+  function autoTitle() {
+    const first = messages.find((m) => m.role === "user");
+    const raw = (first ? first.text : "New chat").replace(/\s+/g, " ").trim();
+    if (!raw) return "New chat";
+    return raw.length > 40 ? raw.slice(0, 40).trimEnd() + "…" : raw;
+  }
+
+  // --- Conversation lifecycle ----------------------------------------
+
+  // Wipe the on-screen conversation without touching what's stored.
+  function resetConversationState() {
+    currentId = null;
+    messages = [];
+    msgSeq = 0;
+    history = [];
+    lastCritique = { text: "", sourceQuestion: "", criticModel: "", truncated: false, stopped: false };
+    resetMessagesEmptyState();
+    $("panel-body").innerHTML = "";
+    closePanel();
+    hideBanner();
+  }
+
+  function newChat() {
+    saveCurrent();                 // keep whatever was open
+    resetConversationState();
+    renderSidebar();
+    if (isNarrowLayout()) collapseSidebar();
+    $("input").focus();
+  }
+
+  // Load a saved conversation back in full: messages, model attribution,
+  // CRITIQUE / REBUTTAL labels, cut-off notices, and which model was primary.
+  function loadConversation(id) {
+    const conv = conversations.find((c) => c.id === id);
+    if (!conv) return;
+
+    saveCurrent();                 // don't lose the conversation on screen
+
+    currentId = conv.id;
+
+    // Restore this conversation's roles before anything renders.
+    primary = MODELS[conv.primary] ? conv.primary : "claude";
+    critic = primary === "claude" ? "chatgpt" : "claude";
+    applyRoleStyling();
+
+    // history first — addMessage()'s Continue check reads it.
+    history = conv.history.map((h) => ({ role: h.role, content: h.content }));
+
+    messages = [];
+    msgSeq = 0;
+    $("messages").innerHTML = "";
+    lastCritique = { text: "", sourceQuestion: "", criticModel: "", truncated: false };
+    $("panel-body").innerHTML = "";
+    closePanel();
+    hideBanner();
+
+    conv.messages.forEach((m) =>
+      addMessage({
+        role: m.role,
+        text: m.text,
+        model: m.model,
+        kind: m.kind,
+        truncated: m.truncated,
+        stopped: m.stopped,
+      })
+    );
+    if (!conv.messages.length) resetConversationState();
+
+    renderSidebar();
+    if (isNarrowLayout()) collapseSidebar();   // drawer gets out of the way
+    scrollDownForce();                         // opening a chat: jump to the end
+  }
+
+  function deleteConversation(id) {
+    conversations = conversations.filter((c) => c.id !== id);
+    writeStore();
+    // Deleting the open conversation leaves a blank chat behind.
+    if (id === currentId) resetConversationState();
+    renderSidebar();
+  }
+
+  function renameConversation(id, title) {
+    const conv = conversations.find((c) => c.id === id);
+    if (!conv) return;
+    conv.title = title;
+    conv.titleCustom = true;       // stops auto-titling from overwriting it
+    writeStore();
+    renderSidebar();
+  }
+
+  function clearAllHistory() {
+    if (!conversations.length) return;
+    const ok = confirm(
+      "Delete all " + conversations.length + " saved conversation" +
+      (conversations.length === 1 ? "" : "s") + "? This can't be undone."
+    );
+    if (!ok) return;
+    conversations = [];
+    writeStore();
+    resetConversationState();
+    renderSidebar();
+  }
+
+  // --- Sidebar rendering ---------------------------------------------
+  function renderSidebar() {
+    const list = $("chat-list");
+    list.innerHTML = "";
+
+    const sorted = conversations
+      .slice()
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));   // newest first
+
+    if (!sorted.length) {
+      const empty = document.createElement("div");
+      empty.className = "sidebar-empty";
+      empty.textContent = "No saved chats yet. Ask something and it'll show up here.";
+      list.appendChild(empty);
+      return;
+    }
+
+    sorted.forEach((conv) => list.appendChild(buildChatItem(conv)));
+  }
+
+  function buildChatItem(conv) {
+    const item = document.createElement("div");
+    item.className = "chat-item" + (conv.id === currentId ? " active" : "");
+
+    // Open button: title + relative timestamp.
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "chat-open";
+    const title = document.createElement("span");
+    title.className = "chat-title";
+    title.textContent = conv.title || "Untitled chat";   // textContent, never HTML
+    const time = document.createElement("span");
+    time.className = "chat-time";
+    time.textContent = relativeTime(conv.updatedAt);
+    open.appendChild(title);
+    open.appendChild(time);
+    open.onclick = () => loadConversation(conv.id);
+
+    // Rename + delete, revealed on hover.
+    const acts = document.createElement("div");
+    acts.className = "chat-actions";
+
+    const ren = document.createElement("button");
+    ren.type = "button";
+    ren.className = "icon-btn";
+    ren.title = "Rename";
+    ren.innerHTML = ICON_PENCIL;
+    ren.onclick = (e) => { e.stopPropagation(); startRename(conv, item); };
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "icon-btn danger";
+    del.title = "Delete";
+    del.innerHTML = ICON_TRASH;
+    del.onclick = (e) => { e.stopPropagation(); askDelete(conv, item); };
+
+    acts.appendChild(ren);
+    acts.appendChild(del);
+
+    item.appendChild(open);
+    item.appendChild(acts);
+    return item;
+  }
+
+  // Inline rename: the row turns into a text field.
+  function startRename(conv, item) {
+    const input = document.createElement("input");
+    input.className = "chat-rename";
+    input.value = conv.title || "";
+    input.maxLength = 120;
+
+    let settled = false;                 // blur fires after Enter/Escape too
+    const commit = () => {
+      if (settled) return;
+      settled = true;
+      const v = input.value.trim();
+      if (v && v !== conv.title) renameConversation(conv.id, v);
+      else renderSidebar();
+    };
+    const cancel = () => {
+      if (settled) return;
+      settled = true;
+      renderSidebar();
+    };
+
+    input.onkeydown = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); commit(); }
+      if (e.key === "Escape") { e.preventDefault(); cancel(); }
+    };
+    input.onblur = commit;
+
+    item.innerHTML = "";
+    item.appendChild(input);
+    input.focus();
+    input.select();
+  }
+
+  // Two-step delete: the row asks before anything is removed.
+  function askDelete(conv, item) {
+    item.classList.add("confirming");
+    const box = document.createElement("div");
+    box.className = "chat-confirm";
+
+    const label = document.createElement("span");
+    label.textContent = "Delete this chat?";
+
+    const yes = document.createElement("button");
+    yes.type = "button";
+    yes.className = "yes";
+    yes.textContent = "Delete";
+    yes.onclick = (e) => { e.stopPropagation(); deleteConversation(conv.id); };
+
+    const no = document.createElement("button");
+    no.type = "button";
+    no.textContent = "Keep";
+    no.onclick = (e) => { e.stopPropagation(); renderSidebar(); };
+
+    box.appendChild(label);
+    box.appendChild(yes);
+    box.appendChild(no);
+
+    item.innerHTML = "";
+    item.appendChild(box);
+  }
+
+  // "3m ago" / "2h ago" / "4d ago" / an actual date beyond a week.
+  function relativeTime(ts) {
+    const t = Number(ts);
+    if (!t) return "";
+    const diff = Date.now() - t;
+    if (diff < 45000) return "just now";
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return mins + "m ago";
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + "h ago";
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return days + "d ago";
+    return new Date(t).toLocaleDateString();
+  }
+
+  // --- Sidebar collapse ----------------------------------------------
+  // Below this width the sidebar is an overlay drawer, not a column.
+  function isNarrowLayout() { return window.innerWidth <= 900; }
+
+  function toggleSidebar() { $("main").classList.toggle("sidebar-collapsed"); }
+  function collapseSidebar() { $("main").classList.add("sidebar-collapsed"); }
+  function expandSidebar() { $("main").classList.remove("sidebar-collapsed"); }
+
+  // Keep the layout honest as the window changes size:
+  //  - crossing into the narrow layout closes the drawer, so it never
+  //    appears over the chat unasked;
+  //  - shrinking below 1200px with the panel open collapses the sidebar,
+  //    so three columns never squeeze the conversation.
+  // Re-expanding by hand always wins afterwards — this only reacts to a
+  // change in window size.
+  let wasNarrow = isNarrowLayout();
+  window.addEventListener("resize", () => {
+    const now = isNarrowLayout();
+    if (now && !wasNarrow) collapseSidebar();
+    if (!now && window.innerWidth < 1200 &&
+        $("main").classList.contains("panel-open")) {
+      collapseSidebar();
+    }
+    wasNarrow = now;
+  });
+
+  // Escape closes whichever overlay is open. The modal wins, since it sits
+  // on top of everything else.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if ($("settings").classList.contains("open")) { closeSettings(); return; }
+    if (!isNarrowLayout()) return;
+    if (!$("main").classList.contains("sidebar-collapsed")) collapseSidebar();
+    else closePanel();
+  });
+
+  // --- Init ----------------------------------------------------------
+  // Collapsed by default whenever the window is too tight for three columns,
+  // which includes every narrow/mobile screen.
+  if (window.innerWidth < 1100) collapseSidebar();
+
+  apiKeys = loadKeys();          // before any render: the empty state depends on it
+  conversations = loadStore();
+  renderSidebar();
+  applyRoleStyling();
+  renderConnectionStatus();
+  applyCriticAvailability();
+  resetMessagesEmptyState();     // welcome screen on a first visit
+
+  // A refresh returns you to the conversation you were last in.
+  (function restoreLastConversation() {
+    if (!conversations.length) return;
+    const newest = conversations
+      .slice()
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+    if (newest) loadConversation(newest.id);
+  })();
+  </script>
+</body>
+</html>

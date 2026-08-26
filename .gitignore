@@ -1,0 +1,14 @@
+# Cloudflare local dev secrets — NEVER commit these.
+.dev.vars
+.dev.vars.*
+
+# Wrangler / Cloudflare
+.wrangler/
+.mf/
+
+# Node
+node_modules/
+
+# OS / editor cruft
+.DS_Store
+*.log
