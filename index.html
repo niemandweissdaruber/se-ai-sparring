@@ -1207,6 +1207,13 @@
       letter-spacing: 0.01em;
     }
     .usage-cost { color: var(--text-dim); cursor: help; }
+    /* A stopped reply's figures are our own estimate — dotted underline marks
+       them as less precise than a provider-reported reading. */
+    .usage-line.rough { cursor: help; }
+    .usage-line.rough > span {
+      text-decoration: underline dotted var(--border);
+      text-underline-offset: 3px;
+    }
 
     /* Conversation subtotal, sitting beside the trademark note. */
     .composer-foot {
@@ -1872,6 +1879,13 @@
             are billed at the output rate, which is why output counts can run
             higher than the visible reply suggests. Rates live in the
             <code>PRICING</code> object in this page's source.
+          </p>
+          <p>
+            <b>Stopping a reply does not make it free.</b> The provider bills for
+            whatever it already generated. When you press Stop, the exact token
+            counts never arrive, so the figures for that message are worked out
+            here from the text received — shown with <b>&#8776;</b> instead of
+            <b>~</b>, and likely a slight under-estimate.
           </p>
           <button class="act-btn" onclick="resetTotals()">Reset totals</button>
         </section>
@@ -2598,7 +2612,10 @@
     if (out.errorMessage) handleError({ message: out.errorMessage }, model);
 
     // Stopped or failed before a single character: leave no empty bubble.
+    // The input tokens were still sent and still billed, so the estimate is
+    // recorded even though the message itself goes away.
     if (!rec.text) {
+      recordSpend(MODELS[model].provider, rec.apiModel, rec.usage);
       removeMessage(rec);
       setBusy(false);
       return;
@@ -3583,7 +3600,64 @@
   const COST_DISCLAIMER =
     "Estimated from token counts and configured rates. Your actual bill may " +
     "differ due to caching, tier pricing, promotional rates, or rate changes. " +
+    "Stopping a reply does not avoid charges for tokens already generated. " +
     "Check your provider dashboard for exact figures.";
+
+  // Shown instead of the above on figures we worked out ourselves, because
+  // the provider never got the chance to report exact counts.
+  const ROUGH_DISCLAIMER =
+    "Estimated — generation was stopped before the provider reported exact " +
+    "token counts. Actual cost may be slightly higher.";
+
+  // Characters per token, for the one case where we have text but no count:
+  // a reply the reader stopped part-way. ~4 chars/token is a reasonable
+  // average for English prose; code and non-Latin scripts run denser, so
+  // tune this if your usage skews that way.
+  const CHARS_PER_TOKEN = 4;
+
+  // Rough token count for a piece of text. Only ever used for stopped
+  // replies — every other number in the app comes from the provider.
+  function approxTokens(text) {
+    if (typeof text !== "string" || !text.length) return 0;
+    return Math.max(1, Math.round(text.length / CHARS_PER_TOKEN));
+  }
+
+  // All the text a request carried, for estimating input tokens when the
+  // provider never reported them. This UNDER-counts: the server also adds a
+  // system prompt and (for critiques) framing text we don't see here — which
+  // is why the estimate is presented as a floor, not a precise figure.
+  function payloadText(payload) {
+    if (!payload || typeof payload !== "object") return "";
+    const parts = [];
+    if (Array.isArray(payload.messages)) {
+      payload.messages.forEach((m) => {
+        if (m && typeof m.content === "string") parts.push(m.content);
+      });
+    }
+    if (typeof payload.question === "string") parts.push(payload.question);
+    if (typeof payload.targetText === "string") parts.push(payload.targetText);
+    return parts.join("\n");
+  }
+
+  // Build the usage figure for a reply that was stopped mid-flight.
+  //   knownInput — real input counts from the early "usage" event, when the
+  //                provider sent them (Anthropic does; OpenAI doesn't)
+  //   receivedText — what actually arrived, and therefore was generated
+  // The result is flagged `estimated` so every display can say so.
+  function estimateStoppedUsage({ knownInput, receivedText, payload }) {
+    const outputTokens = approxTokens(receivedText);
+    const usage = {
+      inputTokens: knownInput ? knownInput.inputTokens : approxTokens(payloadText(payload)),
+      outputTokens,
+      cachedTokens: knownInput ? knownInput.cachedTokens : 0,
+      cacheWriteTokens: knownInput ? knownInput.cacheWriteTokens : 0,
+      estimated: true,
+    };
+    const total =
+      usage.inputTokens + usage.outputTokens +
+      usage.cachedTokens + usage.cacheWriteTokens;
+    return total > 0 ? usage : null;
+  }
 
   // The usage convention coming from the server (see functions/api/chat.js):
   //   inputTokens      — billed at the base input rate; EXCLUDES cached tokens
@@ -3638,10 +3712,12 @@
     return (Number(n) || 0).toLocaleString("en-US");
   }
 
-  // Every dollar figure in the UI goes through here, so the "~" is never
-  // forgotten.
-  function formatEstimate(amount) {
-    return "~" + formatUSD(amount);
+  // Every dollar figure in the UI goes through here, so the marker is never
+  // forgotten. "~" = priced from the provider's own token counts.
+  // "≈" = priced from OUR estimate, because generation was stopped before the
+  // provider reported counts. The two are deliberately different glyphs.
+  function formatEstimate(amount, rough) {
+    return (rough ? "≈" : "~") + formatUSD(amount);
   }
 
   // --- Spend buckets ---------------------------------------------------
@@ -3656,6 +3732,7 @@
       cost: 0,
       calls: 0,
       unpricedCalls: 0,      // calls whose model had no PRICING entry
+      estimatedCalls: 0,     // stopped replies, priced from our own estimate
     };
   }
   function newSpendBucket() {
@@ -3686,6 +3763,7 @@
     b.cacheWriteTokens += usage.cacheWriteTokens || 0;
     b.outputTokens += usage.outputTokens || 0;
     b.calls += 1;
+    if (usage.estimated) b.estimatedCalls += 1;
     const cost = estimateCost(apiModel, usage);
     if (cost === null) b.unpricedCalls += 1;
     else b.cost += cost;
@@ -3695,6 +3773,8 @@
   const bucketCalls = (bucket) => bucket.anthropic.calls + bucket.openai.calls;
   const bucketUnpriced = (bucket) =>
     bucket.anthropic.unpricedCalls + bucket.openai.unpricedCalls;
+  const bucketEstimated = (bucket) =>
+    bucket.anthropic.estimatedCalls + bucket.openai.estimatedCalls;
 
   // --- State -----------------------------------------------------------
   // Subtotal for the conversation on screen. Saved with the conversation and
@@ -3759,6 +3839,8 @@
       outputTokens: (a.outputTokens || 0) + (b.outputTokens || 0),
       cachedTokens: (a.cachedTokens || 0) + (b.cachedTokens || 0),
       cacheWriteTokens: (a.cacheWriteTokens || 0) + (b.cacheWriteTokens || 0),
+      // Part estimated means the whole figure is an estimate.
+      estimated: !!(a.estimated || b.estimated),
     };
   }
 
@@ -3774,6 +3856,9 @@
       outputTokens: num(raw.outputTokens),
       cachedTokens: num(raw.cachedTokens),
       cacheWriteTokens: num(raw.cacheWriteTokens),
+      // Preserved through storage: a stopped message stays marked as an
+      // estimate after a reload, not silently promoted to an exact reading.
+      estimated: !!raw.estimated,
     };
     const total =
       usage.inputTokens + usage.outputTokens +
@@ -3800,18 +3885,22 @@
     parts.push(`${formatTokens(usage.outputTokens)} out`);
 
     const cost = estimateCost(rec.apiModel, usage);
+    const rough = !!usage.estimated;
     const line = document.createElement("div");
-    line.className = "usage-line";
+    line.className = "usage-line" + (rough ? " rough" : "");
 
     const tokens = document.createElement("span");
-    tokens.textContent = parts.join(" · ");
+    // Stopped replies get a marker on the counts too, since the token numbers
+    // are estimates in their own right — not just the dollar figure.
+    tokens.textContent = (rough ? "≈ " : "") + parts.join(" · ");
+    if (rough) tokens.title = ROUGH_DISCLAIMER;
     line.appendChild(tokens);
 
     if (cost !== null) {
       const money = document.createElement("span");
       money.className = "usage-cost";
-      money.textContent = " · " + formatEstimate(cost);
-      money.title = COST_DISCLAIMER;
+      money.textContent = " · " + formatEstimate(cost, rough);
+      money.title = rough ? ROUGH_DISCLAIMER : COST_DISCLAIMER;
       line.appendChild(money);
     } else if (rec.apiModel) {
       // No configured rate for this model: counts only, never a guess.
@@ -3835,10 +3924,24 @@
 
     if (!bucketCalls(convSpend)) return;    // nothing spent in this chat yet
 
+    // Any estimated call in the mix makes the whole subtotal an estimate.
+    const rough = bucketEstimated(convSpend) > 0;
+
     const label = document.createElement("span");
-    label.textContent = `This chat: ${formatEstimate(bucketCost(convSpend))}`;
+    label.textContent = `This chat: ${formatEstimate(bucketCost(convSpend), rough)}`;
     el.appendChild(label);
-    el.title = COST_DISCLAIMER;
+    el.title = rough
+      ? COST_DISCLAIMER + " " + ROUGH_DISCLAIMER
+      : COST_DISCLAIMER;
+
+    if (rough) {
+      const flag = document.createElement("span");
+      flag.className = "cost-flag";
+      const n = bucketEstimated(convSpend);
+      flag.textContent = ` (${n} stopped, estimated)`;
+      flag.title = ROUGH_DISCLAIMER;
+      el.appendChild(flag);
+    }
 
     if (bucketUnpriced(convSpend)) {
       const flag = document.createElement("span");
@@ -3857,17 +3960,20 @@
 
     const line = document.createElement("div");
     line.className = "totals-line";
-    line.title = COST_DISCLAIMER;
+    line.title = bucketEstimated(allTimeSpend)
+      ? COST_DISCLAIMER + " " + ROUGH_DISCLAIMER
+      : COST_DISCLAIMER;
     // Each provider's figure is kept unbreakable, so a narrow sidebar wraps
-    // between the two rather than through the middle of an amount.
+    // between the two rather than through the middle of an amount. A provider
+    // whose total includes a stopped reply is marked with "≈".
     [
-      ["Claude", allTimeSpend.anthropic.cost],
-      ["ChatGPT", allTimeSpend.openai.cost],
-    ].forEach(([name, cost], i) => {
+      ["Claude", allTimeSpend.anthropic],
+      ["ChatGPT", allTimeSpend.openai],
+    ].forEach(([name, spend], i) => {
       if (i) line.appendChild(document.createTextNode(" · "));
       const part = document.createElement("span");
       part.className = "totals-part";
-      part.textContent = `${name} ${formatEstimate(cost)}`;
+      part.textContent = `${name} ${formatEstimate(spend.cost, spend.estimatedCalls > 0)}`;
       line.appendChild(part);
     });
     el.appendChild(line);
@@ -3880,9 +3986,12 @@
       allTimeSpend.anthropic.cachedTokens + allTimeSpend.anthropic.cacheWriteTokens +
       allTimeSpend.openai.inputTokens + allTimeSpend.openai.outputTokens +
       allTimeSpend.openai.cachedTokens + allTimeSpend.openai.cacheWriteTokens;
+    const estimated = bucketEstimated(allTimeSpend);
     sub.textContent = calls
-      ? `all time · ${formatTokens(tokens)} tokens over ${formatTokens(calls)} call${calls === 1 ? "" : "s"}`
+      ? `all time · ${formatTokens(tokens)} tokens over ${formatTokens(calls)} call${calls === 1 ? "" : "s"}` +
+        (estimated ? ` · ${estimated} estimated` : "")
       : "all time · no usage recorded yet";
+    if (estimated) sub.title = ROUGH_DISCLAIMER;
     el.appendChild(sub);
 
     const reset = document.createElement("button");
@@ -3931,7 +4040,7 @@
   //             NOT retry with the blocking path
   //   json    — the server answered with ordinary JSON instead of a stream
   //             (a missing key, say); hand it back rather than re-requesting
-  async function openStream(payload, { onDelta, onDone, onError, signal }) {
+  async function openStream(payload, { onDelta, onDone, onError, onUsage, signal }) {
     let res;
     try {
       res = await fetch("/api/chat", {
@@ -3967,6 +4076,9 @@
       // The done event also carries the final token usage and the exact
       // model ID that served the request (used for pricing).
       else if (evt.type === "done") onDone(!!evt.truncated, evt.usage, evt.model);
+      // Early, best-effort usage + model. Arrives before any abort, which is
+      // the whole point of it — see the server's note on this event.
+      else if (evt.type === "usage" && onUsage) onUsage(evt.usage, evt.model);
       else if (evt.type === "error") onError(evt.message || "Something went wrong.");
     };
 
@@ -4171,8 +4283,10 @@
 
     let truncated = false;
     let errorMessage = null;
-    let usage = null;
+    let usage = null;            // authoritative counts, from the done event
+    let partialUsage = null;     // real input counts seen before any abort
     let apiModel = null;
+    const baseText = store.text; // Continue starts from existing text
 
     beginStream(controller, source);
 
@@ -4185,13 +4299,32 @@
       onDone: (tr, u, model) => {
         truncated = tr;
         usage = normalizeUsage(u);
-        apiModel = typeof model === "string" ? model : null;
+        if (typeof model === "string") apiModel = model;
+      },
+      onUsage: (u, model) => {
+        if (typeof model === "string") apiModel = model;
+        const partial = normalizeUsage(u);
+        if (partial) partialUsage = partial;
       },
       onError: (msg) => { errorMessage = msg; },
     });
 
     painter.cancel();
     endStream();
+
+    // Stop was pressed. The provider still generated — and billed for — the
+    // tokens that arrived, but the terminal event carrying the exact counts
+    // never came, so estimate rather than record nothing.
+    //
+    // If `done` somehow landed before the abort completed, those real numbers
+    // win: `usage` is only replaced when it's still null.
+    if (result.aborted && !usage) {
+      usage = estimateStoppedUsage({
+        knownInput: partialUsage,
+        receivedText: store.text.slice(baseText.length),
+        payload,
+      });
+    }
 
     return { ...result, truncated, errorMessage, usage, apiModel };
   }

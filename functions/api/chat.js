@@ -406,6 +406,14 @@ function mergeRawUsage(target, incoming) {
 //   { type: "delta", text: "..." }      a chunk of reply text
 //   { type: "done",  truncated: bool }  finished (truncated = hit the cap)
 //   { type: "error", message: "..." }   friendly message only, never raw
+//   { type: "usage", partial: true }    EARLY, best-effort usage + model id
+//
+// The "usage" event exists because of Stop: an aborted stream never receives
+// the terminal event, so the client would otherwise have no model ID and no
+// input-token count with which to price the tokens the provider already
+// generated and billed. This event is sent as soon as anything is known —
+// immediately for the model ID, and on Anthropic's message_start for real
+// input counts. `done` remains authoritative when it arrives.
 //
 // The normalized stream goes out as SSE itself: one `data: {...}` line per
 // event. Provider error bodies and API keys never cross this boundary — they
@@ -506,6 +514,10 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
   // whatever turns up and normalize once at the end.
   let rawUsage = null;
 
+  // Tell the client which model is answering before any text arrives, so a
+  // Stop can still be priced. See the "usage" event note above.
+  await send({ type: "usage", partial: true, usage: null, model: CONFIG.anthropic.model });
+
   await readSSE(res, async (evt) => {
     const d = evt.data;
     if (!d || typeof d !== "object") return;
@@ -525,10 +537,22 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
         return;
       }
 
-      case "message_start":
-        // Input + cache counts live on the initial message object.
+      case "message_start": {
+        // Input + cache counts live on the initial message object. Forward
+        // them straight away: these are REAL numbers, and if the reader hits
+        // Stop they're all the client will ever get.
         if (d.message) rawUsage = mergeRawUsage(rawUsage, d.message.usage);
+        const early = normalizeUsage("anthropic", rawUsage);
+        if (early) {
+          await send({
+            type: "usage",
+            partial: true,
+            usage: early,
+            model: CONFIG.anthropic.model,
+          });
+        }
         return;
+      }
 
       case "message_delta":
         // Where stop_reason lands on a streamed response — and the final
@@ -608,6 +632,11 @@ async function streamOpenAI({ apiKey, system, messages, send }) {
   // The final usage object rides on response.completed (and on
   // response.incomplete when the reply was cut off).
   let rawUsage = null;
+
+  // The Responses API doesn't report usage until it finishes, so this early
+  // event carries the model ID only — enough for the client to price its own
+  // estimate if the reader hits Stop.
+  await send({ type: "usage", partial: true, usage: null, model: CONFIG.openai.model });
 
   await readSSE(res, async (evt) => {
     const d = evt.data;
