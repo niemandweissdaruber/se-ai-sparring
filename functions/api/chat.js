@@ -135,7 +135,18 @@ export async function onRequestPost(context) {
     } else {
       result = await callOpenAI({ apiKey, system, messages: builtMessages });
     }
-    return json({ text: result.text, truncated: result.truncated }, 200);
+    // `usage` is the normalized token count (or null when the provider didn't
+    // give us a usable one) and `model` is the exact model ID that served the
+    // request, so the client can price it without duplicating CONFIG.
+    return json(
+      {
+        text: result.text,
+        truncated: result.truncated,
+        usage: result.usage,
+        model: CONFIG[provider].model,
+      },
+      200
+    );
   } catch (err) {
     // Never leak raw API error bodies or the key to the CLIENT. We do log the
     // detail server-side (visible in `wrangler pages dev` / Cloudflare logs)
@@ -232,7 +243,11 @@ async function callAnthropic({ apiKey, system, messages }) {
   // "max_tokens" is Anthropic's signal that the reply was cut off by the cap.
   const truncated = data.stop_reason === "max_tokens";
 
-  return { text: text || "(empty response)", truncated };
+  return {
+    text: text || "(empty response)",
+    truncated,
+    usage: normalizeUsage("anthropic", data.usage),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +294,11 @@ async function callOpenAI({ apiKey, system, messages }) {
     data.status === "incomplete" &&
     (reason === "max_output_tokens" || reason === undefined || reason === null);
 
-  return { text: extractOpenAIText(data) || "(empty response)", truncated };
+  return {
+    text: extractOpenAIText(data) || "(empty response)",
+    truncated,
+    usage: normalizeUsage("openai", data.usage),
+  };
 }
 
 // The Responses API may return a convenience `output_text`, or an `output`
@@ -302,6 +321,79 @@ function extractOpenAIText(data) {
     }
   }
   return parts.join("").trim();
+}
+
+// ---------------------------------------------------------------------------
+// TOKEN USAGE
+//
+// Normalized shape handed to the client:
+//   { inputTokens, outputTokens, cachedTokens, cacheWriteTokens }
+//
+// CONVENTION — read this before changing anything here:
+//   `inputTokens` is always the number of tokens billed at the BASE input
+//   rate. Cached tokens are reported SEPARATELY and are never included in it.
+//   The providers disagree natively, so they are reconciled here:
+//     * Anthropic already excludes cache reads/writes from input_tokens.
+//     * OpenAI includes cached tokens inside input_tokens, so we subtract.
+//   That way the client has one rule and can price each bucket directly.
+//
+// Reasoning/thinking tokens are billed at the output rate by both providers
+// and are already inside output_tokens — nothing extra to do, but it explains
+// why output counts can look high.
+//
+// Returns null when nothing usable came back. The client then omits the cost
+// line for that message rather than showing a number we can't stand behind.
+// ---------------------------------------------------------------------------
+function normalizeUsage(provider, raw) {
+  if (!raw || typeof raw !== "object") return null;
+
+  // Anything non-numeric, negative or NaN counts as zero rather than throwing.
+  const num = (v) =>
+    typeof v === "number" && isFinite(v) && v > 0 ? Math.round(v) : 0;
+
+  let usage;
+  if (provider === "anthropic") {
+    usage = {
+      inputTokens: num(raw.input_tokens),
+      outputTokens: num(raw.output_tokens),
+      cachedTokens: num(raw.cache_read_input_tokens),
+      cacheWriteTokens: num(raw.cache_creation_input_tokens),
+    };
+  } else {
+    const details =
+      raw.input_tokens_details && typeof raw.input_tokens_details === "object"
+        ? raw.input_tokens_details
+        : {};
+    const cached = num(details.cached_tokens);
+    usage = {
+      // Subtract the cached portion so it isn't billed twice by the client.
+      inputTokens: Math.max(0, num(raw.input_tokens) - cached),
+      outputTokens: num(raw.output_tokens),
+      cachedTokens: cached,
+      cacheWriteTokens: 0,          // the Responses API doesn't report writes
+    };
+  }
+
+  // A usage object arrived but nothing numeric came out of it: the shape isn't
+  // what we expect. Log a redacted sample so it can be inspected, and report
+  // no usage rather than a misleading zero-cost line.
+  const total =
+    usage.inputTokens + usage.outputTokens +
+    usage.cachedTokens + usage.cacheWriteTokens;
+  if (total === 0) {
+    console.log(`[${provider} usage] unrecognised usage shape — ${snippet(raw)}`);
+    return null;
+  }
+
+  return usage;
+}
+
+// Streamed usage arrives in pieces across terminal events (Anthropic sends
+// input counts early and output counts late), so raw fragments are merged as
+// they show up and normalized once at the end.
+function mergeRawUsage(target, incoming) {
+  if (!incoming || typeof incoming !== "object") return target;
+  return Object.assign(target || {}, incoming);
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +501,10 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
 
   const logUnknown = makeUnknownEventLogger("Anthropic");
   let truncated = false;
+  // Usage is split across events: message_start carries the input and cache
+  // counts, message_delta / message_stop carry the final output count. Merge
+  // whatever turns up and normalize once at the end.
+  let rawUsage = null;
 
   await readSSE(res, async (evt) => {
     const d = evt.data;
@@ -429,9 +525,21 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
         return;
       }
 
+      case "message_start":
+        // Input + cache counts live on the initial message object.
+        if (d.message) rawUsage = mergeRawUsage(rawUsage, d.message.usage);
+        return;
+
       case "message_delta":
-        // Where stop_reason lands on a streamed response.
+        // Where stop_reason lands on a streamed response — and the final
+        // output_tokens count.
         if (d.delta && d.delta.stop_reason === "max_tokens") truncated = true;
+        rawUsage = mergeRawUsage(rawUsage, d.usage);
+        return;
+
+      case "message_stop":
+        // Some versions repeat usage here; harmless to merge again.
+        rawUsage = mergeRawUsage(rawUsage, d.usage);
         return;
 
       case "error":
@@ -444,10 +552,8 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
         return;
 
       // Known, uninteresting.
-      case "message_start":
       case "content_block_start":
       case "content_block_stop":
-      case "message_stop":
       case "ping":
         return;
 
@@ -456,7 +562,12 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
     }
   });
 
-  await send({ type: "done", truncated });
+  await send({
+    type: "done",
+    truncated,
+    usage: normalizeUsage("anthropic", rawUsage),
+    model: CONFIG.anthropic.model,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +605,9 @@ async function streamOpenAI({ apiKey, system, messages, send }) {
 
   const logUnknown = makeUnknownEventLogger("OpenAI");
   let truncated = false;
+  // The final usage object rides on response.completed (and on
+  // response.incomplete when the reply was cut off).
+  let rawUsage = null;
 
   await readSSE(res, async (evt) => {
     const d = evt.data;
@@ -514,6 +628,7 @@ async function streamOpenAI({ apiKey, system, messages, send }) {
     // 2) Terminal events. Advisory only — we finish when the body ends.
     if (type === "response.completed" || type === "response.incomplete") {
       const r = d.response || {};
+      rawUsage = mergeRawUsage(rawUsage, r.usage);
       const reason = r.incomplete_details && r.incomplete_details.reason;
       if (
         type === "response.incomplete" ||
@@ -550,7 +665,12 @@ async function streamOpenAI({ apiKey, system, messages, send }) {
     logUnknown(type, d);
   });
 
-  await send({ type: "done", truncated });
+  await send({
+    type: "done",
+    truncated,
+    usage: normalizeUsage("openai", rawUsage),
+    model: CONFIG.openai.model,
+  });
 }
 
 // Returns the text chunk for an output-text delta event, or null if this

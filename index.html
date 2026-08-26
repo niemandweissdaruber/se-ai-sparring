@@ -1193,17 +1193,114 @@
     }
     .float-critique[disabled] { opacity: 0.5; cursor: not-allowed; }
 
+    /* ===================================================================
+       Token + cost display. Muted throughout — it is metadata, not content.
+       =================================================================== */
+
+    /* Per-message line, under the action row. */
+    .usage-line {
+      margin-top: 7px;
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--text-faint);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.01em;
+    }
+    .usage-cost { color: var(--text-dim); cursor: help; }
+
+    /* Conversation subtotal, sitting beside the trademark note. */
+    .composer-foot {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 14px;
+      max-width: 820px;
+      margin: 9px auto 0;
+    }
+    .chat-cost {
+      flex: none;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      cursor: help;
+    }
+    .chat-cost:empty { display: none; }
+    .cost-flag { color: var(--text-faint); }
+
+    /* All-time totals in the sidebar foot. */
+    .totals {
+      margin-bottom: 10px;
+      padding: 9px 10px;
+      background: var(--bg-2);
+      border: 1px solid var(--border-soft);
+      border-radius: 8px;
+    }
+    .totals-part { white-space: nowrap; }
+    .totals-line {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+      cursor: help;
+    }
+    .totals-sub {
+      margin-top: 3px;
+      font-size: 10.5px;
+      line-height: 1.4;
+      color: var(--text-faint);
+    }
+    .totals-reset {
+      margin-top: 7px;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-faint);
+      background: transparent;
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      padding: 3px 9px;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    .totals-reset:hover { color: var(--text); border-color: var(--border); }
+
+    /* Cost note in Settings reuses the privacy card, with running text. */
+    .cost-note p {
+      margin: 0 0 9px;
+      font-size: 12.5px;
+      line-height: 1.65;
+      color: var(--text-dim);
+    }
+    .cost-note code {
+      font-family: var(--mono);
+      font-size: 0.9em;
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.07);
+    }
+    .cost-note a {
+      color: var(--primary-accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
     /* Small trademark note — under the composer and inside Settings. */
     .legal {
-      margin: 9px auto 0;
-      max-width: 820px;
+      margin: 0;
+      flex: 1;
       font-size: 10.5px;
       line-height: 1.5;
       color: var(--text-faint);
       opacity: 0.72;
       text-align: center;
     }
-    .modal-body .legal { margin: 0; text-align: left; }
+    .modal-body .legal { margin: 0; text-align: left; flex: none; }
+    /* Stack the composer footer when there isn't room side by side. */
+    @media (max-width: 640px) {
+      .composer-foot { flex-direction: column; align-items: center; gap: 5px; }
+      .legal { text-align: center; }
+    }
 
     /* ---- Streaming caret --------------------------------------------- */
     /* Our own element, appended after sanitization — never model output. */
@@ -1609,6 +1706,10 @@
           <div class="sidebar-list" id="chat-list"></div>
 
           <div class="sidebar-foot">
+            <!-- All-time token + cost totals, split per provider.
+                 Filled in by renderTotals(). -->
+            <div class="totals" id="totals"></div>
+
             <button class="clear-all" onclick="clearAllHistory()">Clear all history</button>
             <!-- Gentle nudge when localStorage is filling up. -->
             <div class="storage-note hidden" id="storage-note"></div>
@@ -1640,11 +1741,17 @@
             <button class="send" id="send" onclick="onSendClick()">Send</button>
           </div>
 
-          <!-- Trademark note. Also repeated in Settings. -->
-          <p class="legal">
-            Not affiliated with Anthropic or OpenAI. Claude and ChatGPT are
-            trademarks of their respective owners.
-          </p>
+          <div class="composer-foot">
+            <!-- Running estimate for this conversation, critiques and
+                 rebuttals included. Filled in by renderChatCost(). -->
+            <div class="chat-cost" id="chat-cost"></div>
+
+            <!-- Trademark note. Also repeated in Settings. -->
+            <p class="legal">
+              Not affiliated with Anthropic or OpenAI. Claude and ChatGPT are
+              trademarks of their respective owners.
+            </p>
+          </div>
         </div>
       </div>
 
@@ -1748,6 +1855,27 @@
         <div id="settings-guides"></div>
         <div id="settings-privacy"></div>
 
+        <!-- Honesty about the cost figures. The same sentence is used as the
+             tooltip on every "~$" figure in the app (COST_DISCLAIMER). -->
+        <section class="privacy cost-note">
+          <h3>About the cost estimates</h3>
+          <p>
+            Estimated from token counts and configured rates. Your actual bill
+            may differ due to caching, tier pricing, promotional rates, or rate
+            changes. Check your provider dashboard for exact figures:
+            <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>
+            and
+            <a href="https://platform.openai.com" target="_blank" rel="noopener noreferrer">platform.openai.com</a>.
+          </p>
+          <p>
+            Token counts come straight from each API response. Reasoning tokens
+            are billed at the output rate, which is why output counts can run
+            higher than the visible reply suggests. Rates live in the
+            <code>PRICING</code> object in this page's source.
+          </p>
+          <button class="act-btn" onclick="resetTotals()">Reset totals</button>
+        </section>
+
         <p class="legal">
           Not affiliated with Anthropic or OpenAI. Claude and ChatGPT are
           trademarks of their respective owners.
@@ -1756,8 +1884,9 @@
         <section class="danger-zone">
           <button class="clear-all" onclick="clearAllMyData()">Clear all my data</button>
           <p class="danger-note">
-            Removes your keys and every saved conversation from this browser.
-            Your keys stay valid at the providers — revoke them there if needed.
+            Removes your keys, every saved conversation, and the usage totals
+            from this browser. Your keys stay valid at the providers — revoke
+            them there if needed.
           </p>
         </section>
       </div>
@@ -1791,6 +1920,28 @@
                keyName: "Anthropic" },
     chatgpt: { provider: "openai",    name: "ChatGPT", letter: "G", cls: "chatgpt",
                keyName: "OpenAI" },
+  };
+
+  // =====================================================================
+  //  PRICING — the single place rates live. Update here when they change.
+  // =====================================================================
+  const PRICING = {
+    // USD per 1M tokens. Verified 2026-08-26 against provider pricing pages.
+    // RE-CHECK PERIODICALLY — rates change, and one of these is promotional.
+
+    "claude-opus-5": {
+      input:      5.00,
+      output:    25.00,
+      cacheRead:  0.50,  // 0.1x base input
+      cacheWrite: 6.25,  // 1.25x base input (5-min write); 1-hour write is 10.00
+    },
+
+    "gpt-5.6-sol": {
+      // Promotional pricing, stated as available at least through 2026-11-21.
+      // Standard rates are $5.00 / $30.00 — swap these back when the promo ends.
+      input:      4.00,
+      output:    20.00,
+    },
   };
 
   // --- State ---------------------------------------------------------
@@ -2219,6 +2370,10 @@
       actions.appendChild(makeCopyButton(() => rec.text));
 
       body.appendChild(actions);
+
+      // Tokens + estimated cost, last and muted so it stays out of the way.
+      const usageLine = buildUsageLine(rec);
+      if (usageLine) body.appendChild(usageLine);
     }
 
     wrap.appendChild(body);
@@ -2236,6 +2391,8 @@
       stopped: false,
       streaming: false,
       model: null,
+      usage: null,       // normalized token counts from the API, or null
+      apiModel: null,    // exact provider model ID, for the PRICING lookup
       ...rec,
     };
     messages.push(record);
@@ -2417,13 +2574,17 @@
         return;
       }
       history.push({ role: "assistant", content: data.text });
+      const fallbackUsage = normalizeUsage(data.usage);
       addMessage({
         role: "assistant",
         text: data.text,
         model,
         kind,
         truncated: !!data.truncated,
+        usage: fallbackUsage,
+        apiModel: data.model || null,
       });
+      recordSpend(MODELS[model].provider, data.model, fallbackUsage);
       setBusy(false);
       saveCurrent();
       return;
@@ -2432,6 +2593,8 @@
     // --- Streamed (possibly stopped, or failed part-way) ---------------
     rec.truncated = out.truncated;
     rec.stopped = !!out.aborted;
+    rec.usage = out.usage;
+    rec.apiModel = out.apiModel;
     if (out.errorMessage) handleError({ message: out.errorMessage }, model);
 
     // Stopped or failed before a single character: leave no empty bubble.
@@ -2444,6 +2607,10 @@
     // history first, so the final render can decide whether to offer
     // "Continue" (see canContinue).
     history.push({ role: "assistant", content: rec.text });
+    // Count the call before the final render, so the subtotal under the
+    // composer updates in the same frame as the message's own usage line.
+    // (A stopped stream still reports usage for what was generated.)
+    recordSpend(MODELS[model].provider, rec.apiModel, rec.usage);
     refreshMessage(rec);          // final full render + copy buttons + notes
     setBusy(false);
     saveCurrent();                // save once, complete — not per chunk
@@ -2503,6 +2670,12 @@
                                  payload, "chat", () => chatScroller.tick());
     rec.streaming = false;
 
+    // A continuation is a second billed call. Its tokens are added to this
+    // message's own usage line (so the figure covers the whole reply) and
+    // counted once in the conversation and all-time totals.
+    let extraUsage = null;
+    let extraModel = null;
+
     if (!out.started) {
       // Fall back to the blocking request. The nudge is still in `history`,
       // which is what this call needs to send.
@@ -2517,12 +2690,20 @@
       }
       rec.text = base + data.text;
       rec.truncated = !!data.truncated;
+      extraUsage = normalizeUsage(data.usage);
+      extraModel = data.model || null;
     } else {
       history.pop();                     // drop the nudge
       rec.truncated = out.truncated;
       rec.stopped = !!out.aborted;
+      extraUsage = out.usage;
+      extraModel = out.apiModel;
       if (out.errorMessage) handleError({ message: out.errorMessage }, rec.model);
     }
+
+    rec.usage = sumUsage(rec.usage, extraUsage);
+    if (extraModel) rec.apiModel = extraModel;
+    recordSpend(MODELS[rec.model].provider, extraModel, extraUsage);
 
     // Collapse the two API turns back into one assistant turn, so the
     // conversation reads as a single reply from here on.
@@ -2591,6 +2772,8 @@
       criticModel: criticAtRequest,
       truncated: false,
       stopped: false,
+      usage: null,        // carried into the thread when "Send back" is used
+      apiModel: null,
     };
 
     const out = await streamText(lastCritique, card, payload, "panel",
@@ -2611,9 +2794,13 @@
       }
       lastCritique.text = data.text;
       lastCritique.truncated = !!data.truncated;
+      lastCritique.usage = normalizeUsage(data.usage);
+      lastCritique.apiModel = data.model || null;
     } else {
       lastCritique.truncated = out.truncated;
       lastCritique.stopped = !!out.aborted;
+      lastCritique.usage = out.usage;
+      lastCritique.apiModel = out.apiModel;
       if (out.errorMessage) {
         // Mid-stream failure: keep what arrived, say what happened.
         handleError({ message: out.errorMessage }, criticAtRequest);
@@ -2627,6 +2814,14 @@
         : "The reviewer returned nothing. Try again.";
       return;
     }
+
+    // A critique is a billed call whether or not it is ever sent back into
+    // the thread, so it is counted here — once, at the point of the call.
+    recordSpend(
+      MODELS[criticAtRequest].provider,
+      lastCritique.apiModel,
+      lastCritique.usage
+    );
 
     // Final full render — this is the pass that attaches the per-code-block
     // copy buttons.
@@ -2649,6 +2844,10 @@
     }
     actions.appendChild(makeCopyButton(() => lastCritique.text));
     bodyEl.appendChild(actions);
+
+    // Tokens + estimated cost for the critique itself.
+    const critiqueUsage = buildUsageLine(lastCritique);
+    if (critiqueUsage) bodyEl.appendChild(critiqueUsage);
 
     $("send-back").disabled = false;
   }
@@ -2705,9 +2904,14 @@
         }
         lastCritique.text = lastCritique.text + data.text;
         lastCritique.truncated = !!data.truncated;
+        lastCritique.usage = sumUsage(lastCritique.usage, normalizeUsage(data.usage));
+        recordSpend(MODELS[criticModel].provider, data.model, normalizeUsage(data.usage));
       } else {
         lastCritique.truncated = out.truncated;
         lastCritique.stopped = !!out.aborted;
+        lastCritique.usage = sumUsage(lastCritique.usage, out.usage);
+        if (out.apiModel) lastCritique.apiModel = out.apiModel;
+        recordSpend(MODELS[criticModel].provider, out.apiModel, out.usage);
         if (out.errorMessage) handleError({ message: out.errorMessage }, criticModel);
       }
 
@@ -2734,12 +2938,16 @@
     // Promote the critique into the main thread as its own message, attributed
     // to the critic model, so the chat reads as the two models talking:
     //   [you] question -> [primary] answer -> [critic] critique -> [primary] rebuttal
+    // The usage travels with the message so its line renders (and survives a
+    // reload). It is NOT re-recorded — runCritique already counted the call.
     addMessage({
       role: "assistant",
       text: lastCritique.text,
       model: lastCritique.criticModel || critic,
       kind: "critique",
       truncated: !!lastCritique.truncated,
+      usage: lastCritique.usage,
+      apiModel: lastCritique.apiModel,
     });
 
     // Feed the critique into the main chat as a new user turn, framed so the
@@ -3187,7 +3395,8 @@
   // Keys AND conversations, in one deliberate step.
   function clearAllMyData() {
     const ok = confirm(
-      "Remove your API keys and delete every saved conversation from this browser?\n\n" +
+      "Remove your API keys, delete every saved conversation, and reset the " +
+      "usage totals in this browser?\n\n" +
       "This can't be undone. Your keys stay valid at Anthropic and OpenAI — " +
       "revoke them there if you want them dead."
     );
@@ -3195,9 +3404,11 @@
 
     apiKeys = { anthropic: "", openai: "" };
     conversations = [];
+    allTimeSpend = newSpendBucket();
     try {
       localStorage.removeItem(KEYS_STORE_KEY);
       localStorage.removeItem(STORE_KEY);
+      localStorage.removeItem(SPEND_STORE_KEY);
     } catch (err) {
       console.warn("Could not clear stored data.", err);
     }
@@ -3210,6 +3421,7 @@
 
     resetConversationState();
     renderSidebar();
+    renderTotals();
     refreshKeyDependentUI();
     closeSettings();
   }
@@ -3357,6 +3569,342 @@
   }
 
   // =====================================================================
+  //  Token + cost tracking
+  //
+  //  Everything here is driven by the token counts the provider APIs already
+  //  return with each reply — there is no admin/organization usage API in
+  //  play, and none is needed.
+  //
+  //  The numbers are ESTIMATES. They are labelled as such everywhere they
+  //  appear (see COST_DISCLAIMER) and every figure is prefixed with "~".
+  // =====================================================================
+
+  // Shown as a tooltip on every figure, and in full in Settings.
+  const COST_DISCLAIMER =
+    "Estimated from token counts and configured rates. Your actual bill may " +
+    "differ due to caching, tier pricing, promotional rates, or rate changes. " +
+    "Check your provider dashboard for exact figures.";
+
+  // The usage convention coming from the server (see functions/api/chat.js):
+  //   inputTokens      — billed at the base input rate; EXCLUDES cached tokens
+  //   cachedTokens     — cache reads, billed at cacheRead when a rate exists
+  //   cacheWriteTokens — cache writes, billed at cacheWrite when one exists
+  //   outputTokens     — includes reasoning/thinking tokens, which both
+  //                      providers bill at the output rate
+  //
+  // Cost for one call, in USD. Returns null when the model has no PRICING
+  // entry — we show token counts and no dollar figure rather than guessing.
+  function estimateCost(apiModel, usage) {
+    if (!usage) return null;
+    const rate = PRICING[apiModel];
+    if (!rate) return null;                 // never fall back to another model
+
+    const per = (tokens, r) => ((tokens || 0) / 1e6) * r;
+
+    let cost = per(usage.inputTokens, rate.input) + per(usage.outputTokens, rate.output);
+
+    // Cached tokens get their own rate where one is configured; where it isn't,
+    // they fall back to the base input rate for that same model (never another
+    // model's), which is the closest honest approximation.
+    if (usage.cachedTokens) {
+      cost += per(usage.cachedTokens, rate.cacheRead !== undefined ? rate.cacheRead : rate.input);
+    }
+    if (usage.cacheWriteTokens) {
+      cost += per(usage.cacheWriteTokens, rate.cacheWrite !== undefined ? rate.cacheWrite : rate.input);
+    }
+    return cost;
+  }
+
+  // --- Formatting ------------------------------------------------------
+  // More precision for small amounts: a fraction of a cent should read as
+  // $0.0043, not $0.00.
+  function formatUSD(amount) {
+    const n = Number(amount) || 0;
+    const abs = Math.abs(n);
+    // Genuinely spent, but below what 4 decimals can show: say so rather than
+    // printing $0, which would read as "free".
+    if (abs > 0 && abs < 0.0001) return "<$0.0001";
+    const dp = abs < 0.01 ? 4 : abs < 0.1 ? 3 : 2;
+    let out = n.toFixed(dp);
+    if (dp > 2) {
+      out = out.replace(/0+$/, "");         // 0.0430 -> 0.043
+      if (/\.\d$/.test(out)) out += "0";    // never leave a single decimal
+      if (/\.$/.test(out)) out = out.slice(0, -1);
+    }
+    return "$" + out;
+  }
+
+  function formatTokens(n) {
+    return (Number(n) || 0).toLocaleString("en-US");
+  }
+
+  // Every dollar figure in the UI goes through here, so the "~" is never
+  // forgotten.
+  function formatEstimate(amount) {
+    return "~" + formatUSD(amount);
+  }
+
+  // --- Spend buckets ---------------------------------------------------
+  // One bucket per provider. Used for both the per-conversation subtotal and
+  // the all-time totals, so the shape is shared.
+  function newProviderSpend() {
+    return {
+      inputTokens: 0,
+      cachedTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 0,
+      cost: 0,
+      calls: 0,
+      unpricedCalls: 0,      // calls whose model had no PRICING entry
+    };
+  }
+  function newSpendBucket() {
+    return { anthropic: newProviderSpend(), openai: newProviderSpend() };
+  }
+
+  // Coerce a stored bucket back into shape — a hand-edited or truncated entry
+  // must not poison the arithmetic.
+  function normalizeSpendBucket(raw) {
+    const bucket = newSpendBucket();
+    if (!raw || typeof raw !== "object") return bucket;
+    ["anthropic", "openai"].forEach((provider) => {
+      const src = raw[provider];
+      if (!src || typeof src !== "object") return;
+      Object.keys(bucket[provider]).forEach((field) => {
+        const v = Number(src[field]);
+        bucket[provider][field] = isFinite(v) && v > 0 ? v : 0;
+      });
+    });
+    return bucket;
+  }
+
+  function addUsageToBucket(bucket, provider, apiModel, usage) {
+    const b = bucket[provider];
+    if (!b || !usage) return;
+    b.inputTokens += usage.inputTokens || 0;
+    b.cachedTokens += usage.cachedTokens || 0;
+    b.cacheWriteTokens += usage.cacheWriteTokens || 0;
+    b.outputTokens += usage.outputTokens || 0;
+    b.calls += 1;
+    const cost = estimateCost(apiModel, usage);
+    if (cost === null) b.unpricedCalls += 1;
+    else b.cost += cost;
+  }
+
+  const bucketCost = (bucket) => bucket.anthropic.cost + bucket.openai.cost;
+  const bucketCalls = (bucket) => bucket.anthropic.calls + bucket.openai.calls;
+  const bucketUnpriced = (bucket) =>
+    bucket.anthropic.unpricedCalls + bucket.openai.unpricedCalls;
+
+  // --- State -----------------------------------------------------------
+  // Subtotal for the conversation on screen. Saved with the conversation and
+  // restored when it is reloaded, so a refresh doesn't lose it.
+  let convSpend = newSpendBucket();
+
+  // All-time totals, in their own localStorage entry so "reset totals" and
+  // "clear history" stay independent. NEVER contains keys — token counts and
+  // computed costs only.
+  const SPEND_STORE_KEY = "aivsai.spend";
+  const SPEND_SCHEMA_VERSION = 1;
+  let allTimeSpend = newSpendBucket();
+
+  function loadAllTimeSpend() {
+    try {
+      const raw = localStorage.getItem(SPEND_STORE_KEY);
+      if (!raw) return newSpendBucket();
+      const parsed = JSON.parse(raw);
+      if (!parsed || parsed.version !== SPEND_SCHEMA_VERSION) return newSpendBucket();
+      return normalizeSpendBucket(parsed.providers);
+    } catch (err) {
+      console.warn("Stored usage totals could not be read — starting at zero.", err);
+      return newSpendBucket();
+    }
+  }
+
+  function writeAllTimeSpend() {
+    try {
+      localStorage.setItem(
+        SPEND_STORE_KEY,
+        JSON.stringify({
+          version: SPEND_SCHEMA_VERSION,
+          savedAt: Date.now(),
+          providers: allTimeSpend,
+        })
+      );
+    } catch (err) {
+      // Same rule as chat history: a failed write must never break the app.
+      console.warn("Could not save usage totals.", err);
+    }
+  }
+
+  // Called ONCE per completed API call, from the place that made the call.
+  // Display and accounting are deliberately separate: a critique that is never
+  // sent back into the thread still cost money and still counts here.
+  function recordSpend(provider, apiModel, usage) {
+    if (!usage) return;
+    addUsageToBucket(convSpend, provider, apiModel, usage);
+    addUsageToBucket(allTimeSpend, provider, apiModel, usage);
+    writeAllTimeSpend();
+    renderChatCost();
+    renderTotals();
+  }
+
+  // Continue appends a second call to one message; its tokens are summed into
+  // the message's own line so the figure reflects the whole reply.
+  function sumUsage(a, b) {
+    if (!a) return b || null;
+    if (!b) return a;
+    return {
+      inputTokens: (a.inputTokens || 0) + (b.inputTokens || 0),
+      outputTokens: (a.outputTokens || 0) + (b.outputTokens || 0),
+      cachedTokens: (a.cachedTokens || 0) + (b.cachedTokens || 0),
+      cacheWriteTokens: (a.cacheWriteTokens || 0) + (b.cacheWriteTokens || 0),
+    };
+  }
+
+  // Stored usage objects get the same defensive treatment as everything else.
+  function normalizeUsage(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const num = (v) => {
+      const n = Number(v);
+      return isFinite(n) && n > 0 ? Math.round(n) : 0;
+    };
+    const usage = {
+      inputTokens: num(raw.inputTokens),
+      outputTokens: num(raw.outputTokens),
+      cachedTokens: num(raw.cachedTokens),
+      cacheWriteTokens: num(raw.cacheWriteTokens),
+    };
+    const total =
+      usage.inputTokens + usage.outputTokens +
+      usage.cachedTokens + usage.cacheWriteTokens;
+    return total > 0 ? usage : null;
+  }
+
+  // --- Per-message line ------------------------------------------------
+  // "1,240 in · 820 cached · 890 out · ~$0.028"
+  // Muted and last in the message body, so it never competes with the reply.
+  // Returns null when there's no usage to show.
+  function buildUsageLine(rec) {
+    // Normalized again here, not just at the boundary: a malformed usage
+    // object (hand-edited storage, a future API change) must produce NO line
+    // rather than a misleading row of zeros.
+    const usage = normalizeUsage(rec && rec.usage);
+    if (!usage) return null;
+
+    const parts = [`${formatTokens(usage.inputTokens)} in`];
+    if (usage.cachedTokens) parts.push(`${formatTokens(usage.cachedTokens)} cached`);
+    if (usage.cacheWriteTokens) {
+      parts.push(`${formatTokens(usage.cacheWriteTokens)} cache write`);
+    }
+    parts.push(`${formatTokens(usage.outputTokens)} out`);
+
+    const cost = estimateCost(rec.apiModel, usage);
+    const line = document.createElement("div");
+    line.className = "usage-line";
+
+    const tokens = document.createElement("span");
+    tokens.textContent = parts.join(" · ");
+    line.appendChild(tokens);
+
+    if (cost !== null) {
+      const money = document.createElement("span");
+      money.className = "usage-cost";
+      money.textContent = " · " + formatEstimate(cost);
+      money.title = COST_DISCLAIMER;
+      line.appendChild(money);
+    } else if (rec.apiModel) {
+      // No configured rate for this model: counts only, never a guess.
+      const note = document.createElement("span");
+      note.className = "usage-cost";
+      note.textContent = " · no rate configured";
+      note.title =
+        `No PRICING entry for "${rec.apiModel}", so no cost is estimated. ` +
+        "Add one in the PRICING object to see a figure here.";
+      line.appendChild(note);
+    }
+
+    return line;
+  }
+
+  // --- Conversation subtotal (under the composer) ----------------------
+  function renderChatCost() {
+    const el = $("chat-cost");
+    if (!el) return;
+    el.innerHTML = "";
+
+    if (!bucketCalls(convSpend)) return;    // nothing spent in this chat yet
+
+    const label = document.createElement("span");
+    label.textContent = `This chat: ${formatEstimate(bucketCost(convSpend))}`;
+    el.appendChild(label);
+    el.title = COST_DISCLAIMER;
+
+    if (bucketUnpriced(convSpend)) {
+      const flag = document.createElement("span");
+      flag.className = "cost-flag";
+      flag.textContent = ` (+${bucketUnpriced(convSpend)} unpriced)`;
+      flag.title = "Some calls used a model with no configured rate, so their cost isn't included.";
+      el.appendChild(flag);
+    }
+  }
+
+  // --- All-time totals (sidebar foot) ---------------------------------
+  function renderTotals() {
+    const el = $("totals");
+    if (!el) return;
+    el.innerHTML = "";
+
+    const line = document.createElement("div");
+    line.className = "totals-line";
+    line.title = COST_DISCLAIMER;
+    // Each provider's figure is kept unbreakable, so a narrow sidebar wraps
+    // between the two rather than through the middle of an amount.
+    [
+      ["Claude", allTimeSpend.anthropic.cost],
+      ["ChatGPT", allTimeSpend.openai.cost],
+    ].forEach(([name, cost], i) => {
+      if (i) line.appendChild(document.createTextNode(" · "));
+      const part = document.createElement("span");
+      part.className = "totals-part";
+      part.textContent = `${name} ${formatEstimate(cost)}`;
+      line.appendChild(part);
+    });
+    el.appendChild(line);
+
+    const sub = document.createElement("div");
+    sub.className = "totals-sub";
+    const calls = bucketCalls(allTimeSpend);
+    const tokens =
+      allTimeSpend.anthropic.inputTokens + allTimeSpend.anthropic.outputTokens +
+      allTimeSpend.anthropic.cachedTokens + allTimeSpend.anthropic.cacheWriteTokens +
+      allTimeSpend.openai.inputTokens + allTimeSpend.openai.outputTokens +
+      allTimeSpend.openai.cachedTokens + allTimeSpend.openai.cacheWriteTokens;
+    sub.textContent = calls
+      ? `all time · ${formatTokens(tokens)} tokens over ${formatTokens(calls)} call${calls === 1 ? "" : "s"}`
+      : "all time · no usage recorded yet";
+    el.appendChild(sub);
+
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "totals-reset";
+    reset.textContent = "Reset totals";
+    reset.onclick = resetTotals;
+    el.appendChild(reset);
+  }
+
+  // Resets the counters only — conversations and keys are untouched.
+  function resetTotals() {
+    if (!confirm(
+      "Reset the all-time token and cost totals to zero?\n\n" +
+      "Your conversations and keys are not affected. This only clears the counter."
+    )) return;
+    allTimeSpend = newSpendBucket();
+    writeAllTimeSpend();
+    renderTotals();
+  }
+
+  // =====================================================================
   //  Streaming
   //
   //  The server normalizes both providers into one event vocabulary, so
@@ -3416,7 +3964,9 @@
       if (!evt || typeof evt !== "object") return;
       started = true;
       if (evt.type === "delta" && typeof evt.text === "string") onDelta(evt.text);
-      else if (evt.type === "done") onDone(!!evt.truncated);
+      // The done event also carries the final token usage and the exact
+      // model ID that served the request (used for pricing).
+      else if (evt.type === "done") onDone(!!evt.truncated, evt.usage, evt.model);
       else if (evt.type === "error") onError(evt.message || "Something went wrong.");
     };
 
@@ -3621,6 +4171,8 @@
 
     let truncated = false;
     let errorMessage = null;
+    let usage = null;
+    let apiModel = null;
 
     beginStream(controller, source);
 
@@ -3630,14 +4182,18 @@
         store.text += chunk;
         painter.schedule();
       },
-      onDone: (tr) => { truncated = tr; },
+      onDone: (tr, u, model) => {
+        truncated = tr;
+        usage = normalizeUsage(u);
+        apiModel = typeof model === "string" ? model : null;
+      },
       onError: (msg) => { errorMessage = msg; },
     });
 
     painter.cancel();
     endStream();
 
-    return { ...result, truncated, errorMessage };
+    return { ...result, truncated, errorMessage, usage, apiModel };
   }
 
   // =====================================================================
@@ -3727,11 +4283,14 @@
           text: m.text,
           truncated: !!m.truncated,
           stopped: !!m.stopped,
+          usage: normalizeUsage(m.usage),
+          apiModel: typeof m.apiModel === "string" ? m.apiModel : null,
         })),
       history: c.history
         .filter((h) => h && typeof h.content === "string" &&
                        (h.role === "user" || h.role === "assistant"))
         .map((h) => ({ role: h.role, content: h.content })),
+      spend: normalizeSpendBucket(c.spend),
     };
   }
 
@@ -3804,8 +4363,13 @@
       text: m.text,
       truncated: !!m.truncated,
       stopped: !!m.stopped,
+      usage: m.usage || null,        // token counts only — never keys
+      apiModel: m.apiModel || null,
     }));
     conv.history = history.map((h) => ({ role: h.role, content: h.content }));
+    // Running subtotal for this conversation, so a reload restores it rather
+    // than recomputing (which would miss critiques never sent back).
+    conv.spend = convSpend;
 
     writeStore();
     renderSidebar();
@@ -3831,7 +4395,13 @@
     messages = [];
     msgSeq = 0;
     history = [];
-    lastCritique = { text: "", sourceQuestion: "", criticModel: "", truncated: false, stopped: false };
+    lastCritique = {
+      text: "", sourceQuestion: "", criticModel: "",
+      truncated: false, stopped: false, usage: null, apiModel: null,
+    };
+    // New chat, new subtotal. The all-time totals are untouched.
+    convSpend = newSpendBucket();
+    renderChatCost();
     resetMessagesEmptyState();
     $("panel-body").innerHTML = "";
     closePanel();
@@ -3872,6 +4442,9 @@
     closePanel();
     hideBanner();
 
+    // Restore this conversation's subtotal before the messages render.
+    convSpend = normalizeSpendBucket(conv.spend);
+
     conv.messages.forEach((m) =>
       addMessage({
         role: m.role,
@@ -3880,8 +4453,11 @@
         kind: m.kind,
         truncated: m.truncated,
         stopped: m.stopped,
+        usage: m.usage,
+        apiModel: m.apiModel,
       })
     );
+    renderChatCost();
     if (!conv.messages.length) resetConversationState();
 
     renderSidebar();
@@ -4102,8 +4678,11 @@
 
   upgradeStaticBadges();         // swap the literal C / G for logo files
   apiKeys = loadKeys();          // before any render: the empty state depends on it
+  allTimeSpend = loadAllTimeSpend();
   conversations = loadStore();
   renderSidebar();
+  renderTotals();
+  renderChatCost();
   applyRoleStyling();
   renderConnectionStatus();
   applyCriticAvailability();
