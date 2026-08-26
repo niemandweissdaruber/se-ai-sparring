@@ -46,6 +46,16 @@
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
               "Liberation Mono", monospace;
 
+      /* Circle behind each provider logo. Set per model, because the two
+         marks need opposite grounds:
+           Claude  — orange artwork, reads fine on the app's own dark surface
+           ChatGPT — black artwork, which would vanish on dark, so it gets a
+                     near-white disc. The green accent stays on the ring.
+         Swap either value if you replace a logo with differently-coloured
+         artwork; nothing else needs touching. */
+      --logo-bg-claude: #1d2029;
+      --logo-bg-chatgpt: #f5f5f7;
+
       /* Layout constants */
       --sidebar-w: 264px;         /* fixed width of the left history column */
       --panel-w: 400px;           /* fixed width of the right column */
@@ -175,8 +185,35 @@
       color: #0e0f13;
     }
     .badge.sm { width: 22px; height: 22px; font-size: 12px; }
+    /* Lettermark fallback colours (used when no logo file is present). */
     .badge.claude { background: var(--claude); }
     .badge.chatgpt { background: var(--chatgpt); }
+
+    /* Logo variant: the provider's own artwork, shown as-is inside the same
+       circle. The accent lives on the ring, never on the artwork — the disc
+       behind it is a neutral ground chosen so each mark stays legible. */
+    .badge.has-logo { overflow: hidden; }
+    .badge.has-logo.claude {
+      background: var(--logo-bg-claude);
+      box-shadow: inset 0 0 0 1.5px var(--claude);
+    }
+    /* Near-white disc: the OpenAI mark is black and would be invisible on the
+       app's dark surface. The green accent stays on the ring and glow. */
+    .badge.has-logo.chatgpt {
+      background: var(--logo-bg-chatgpt);
+      box-shadow: inset 0 0 0 1.5px var(--chatgpt);
+    }
+
+    /* Sized to leave a little padding inside the circle. No filters, no
+       transforms — the artwork is displayed exactly as supplied. */
+    .badge-img {
+      display: block;
+      width: 66%;
+      height: 66%;
+      object-fit: contain;
+      pointer-events: none;
+      user-select: none;
+    }
 
     /* ---- Main area: three real columns -------------------------------- */
     /* Sidebar and panel are in-flow grid tracks, not overlays, so neither can
@@ -1091,38 +1128,43 @@
     /* ===================================================================
        Welcome / onboarding (shown until a key is stored)
        =================================================================== */
+    /* margin:auto centres it in the flex column, so the short screen sits in
+       the middle of the conversation area rather than hugging the top. */
     .welcome {
-      margin: 0 auto;
-      max-width: 660px;
+      margin: auto;
+      max-width: 520px;
       width: 100%;
-      padding: 8px 0 26px;
+      padding: 32px 0;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      align-items: center;
+      gap: 14px;
+      text-align: center;
       animation: fadein 0.35s ease both;
     }
     .welcome h2 {
       margin: 0;
-      font-size: 26px;
+      font-size: 28px;
       font-weight: 700;
       letter-spacing: -0.02em;
-      text-align: center;
+      line-height: 1.2;
     }
     .welcome .how {
       margin: 0;
-      text-align: center;
       font-size: 15px;
+      line-height: 1.5;
       color: var(--text-dim);
     }
     .welcome .lead {
-      margin: 0;
+      margin: 2px 0 4px;
       font-size: 13.5px;
       line-height: 1.7;
       color: var(--text-faint);
-      text-align: center;
+      max-width: 460px;
     }
     .welcome-cta {
       align-self: center;
+      margin-top: 2px;
       font: inherit;
       font-weight: 700;
       font-size: 14.5px;
@@ -1150,6 +1192,18 @@
       transform: none;
     }
     .float-critique[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+    /* Small trademark note — under the composer and inside Settings. */
+    .legal {
+      margin: 9px auto 0;
+      max-width: 820px;
+      font-size: 10.5px;
+      line-height: 1.5;
+      color: var(--text-faint);
+      opacity: 0.72;
+      text-align: center;
+    }
+    .modal-body .legal { margin: 0; text-align: left; }
 
     /* ---- Streaming caret --------------------------------------------- */
     /* Our own element, appended after sanitization — never model output. */
@@ -1513,11 +1567,13 @@
         <!-- Primary-model toggle: selected button gets the accent glow. -->
         <div class="toggle" id="toggle">
           <button data-model="claude" class="active" onclick="setPrimary('claude')">
-            <span class="badge sm claude">C</span>
+            <!-- data-badge: upgraded to the /assets logo at startup, falls
+                 back to this literal lettermark if the file isn't there. -->
+            <span class="badge sm claude" data-badge="claude">C</span>
             <span class="label">Claude primary</span>
           </button>
           <button data-model="chatgpt" onclick="setPrimary('chatgpt')">
-            <span class="badge sm chatgpt">G</span>
+            <span class="badge sm chatgpt" data-badge="chatgpt">G</span>
             <span class="label">ChatGPT primary</span>
           </button>
         </div>
@@ -1583,6 +1639,12 @@
             <!-- Doubles as Stop while a reply is streaming. -->
             <button class="send" id="send" onclick="onSendClick()">Send</button>
           </div>
+
+          <!-- Trademark note. Also repeated in Settings. -->
+          <p class="legal">
+            Not affiliated with Anthropic or OpenAI. Claude and ChatGPT are
+            trademarks of their respective owners.
+          </p>
         </div>
       </div>
 
@@ -1641,7 +1703,7 @@
         <section class="key-row">
           <div class="key-head">
             <label for="key-input-claude">
-              <span class="badge sm claude">C</span> Claude — Anthropic key
+              <span class="badge sm claude" data-badge="claude">C</span> Claude — Anthropic key
             </label>
             <span class="key-state" id="key-state-claude">Not connected</span>
           </div>
@@ -1663,7 +1725,7 @@
         <section class="key-row">
           <div class="key-head">
             <label for="key-input-chatgpt">
-              <span class="badge sm chatgpt">G</span> ChatGPT — OpenAI key
+              <span class="badge sm chatgpt" data-badge="chatgpt">G</span> ChatGPT — OpenAI key
             </label>
             <span class="key-state" id="key-state-chatgpt">Not connected</span>
           </div>
@@ -1685,6 +1747,11 @@
              same text is used on the welcome screen. -->
         <div id="settings-guides"></div>
         <div id="settings-privacy"></div>
+
+        <p class="legal">
+          Not affiliated with Anthropic or OpenAI. Claude and ChatGPT are
+          trademarks of their respective owners.
+        </p>
 
         <section class="danger-zone">
           <button class="clear-all" onclick="clearAllMyData()">Clear all my data</button>
@@ -1762,6 +1829,75 @@
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"' +
     ' stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<path d="M20 6 9 17l-5-5"/></svg>';
+  // =====================================================================
+  //  Model badges — provider logo, with a lettermark fallback.
+  //
+  //  Drop your own files in as /assets/claude.webp and /assets/openai.png.
+  //  They're shown as supplied: same circular badge, same size, no filters.
+  //  If a file is missing or fails to load, onerror swaps that badge back to
+  //  the "C" / "G" lettermark, so a broken-image icon can never appear.
+  // =====================================================================
+  const LOGO_SRC = {
+    claude: "/assets/claude.webp",
+    chatgpt: "/assets/openai.png",
+  };
+
+  // Set to true the first time a logo 404s, so every badge built afterwards
+  // renders the lettermark directly instead of retrying a file we know is
+  // missing. Reset by a page reload — add the file and refresh.
+  const logoFailed = { claude: false, chatgpt: false };
+
+  // Badge as an HTML string, for the places that build markup with innerHTML.
+  // `extra` is any additional class on the badge (usually "sm").
+  function badgeHTML(id, extra = "sm") {
+    const m = MODELS[id];
+    const cls = `badge ${extra} ${m.cls}`.replace(/\s+/g, " ").trim();
+    if (logoFailed[id]) return `<span class="${cls}">${m.letter}</span>`;
+    return (
+      `<span class="${cls} has-logo">` +
+      `<img class="badge-img" src="${LOGO_SRC[id]}" alt="${m.name}" ` +
+      `onerror="badgeFallback(this, '${id}')">` +
+      `</span>`
+    );
+  }
+
+  // Same thing, applied to an element that already exists (the panel badge,
+  // and the static badges in the header and Settings).
+  function setBadge(el, id, extra = "sm") {
+    const m = MODELS[id];
+    el.className = `badge ${extra} ${m.cls}`.replace(/\s+/g, " ").trim();
+    el.innerHTML = "";
+    if (logoFailed[id]) {
+      el.textContent = m.letter;
+      return;
+    }
+    el.classList.add("has-logo");
+    const img = document.createElement("img");
+    img.className = "badge-img";
+    img.src = LOGO_SRC[id];
+    img.alt = m.name;
+    img.onerror = () => badgeFallback(img, id);
+    el.appendChild(img);
+  }
+
+  // A logo failed to load: drop back to the lettermark for this badge, and
+  // remember it so later badges skip the image entirely.
+  function badgeFallback(img, id) {
+    logoFailed[id] = true;
+    const badge = img.parentElement;
+    if (!badge) return;
+    badge.classList.remove("has-logo");
+    badge.textContent = MODELS[id].letter;   // clears the <img> too
+  }
+
+  // Turn the literal lettermarks written in the HTML into logo badges.
+  // They stay readable (and correct) in the source either way.
+  function upgradeStaticBadges() {
+    document.querySelectorAll("[data-badge]").forEach((el) => {
+      setBadge(el, el.dataset.badge, el.classList.contains("sm") ? "sm" : "");
+    });
+  }
+
   const ICON_STOP =
     '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"' +
     ' aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>';
@@ -1823,9 +1959,7 @@
     $("input").placeholder = `Ask ${p.name} anything…`;
 
     // Panel: it always shows the CRITIC's review.
-    const badge = $("panel-badge");
-    badge.textContent = c.letter;
-    badge.className = "badge sm " + c.cls;
+    setBadge($("panel-badge"), critic);
     $("panel-sub").textContent = `Reviewed by ${c.name}`;
 
     // "Send back to <primary>" button (unless it is currently a Stop button).
@@ -2022,8 +2156,7 @@
           : rec.kind === "critique"
           ? ' <span class="tag critique-tag">Critique</span>'
           : "";
-      meta.innerHTML =
-        `<span class="badge sm ${m.cls}">${m.letter}</span> ${m.name}` + tag;
+      meta.innerHTML = badgeHTML(rec.model) + ` ${m.name}` + tag;
     } else {
       meta.textContent = "You";
     }
@@ -2187,7 +2320,7 @@
     body.className = "body";
     const m = MODELS[model];
     body.innerHTML =
-      `<div class="meta"><span class="badge sm ${m.cls}">${m.letter}</span> ${m.name}</div>` +
+      `<div class="meta">${badgeHTML(model)} ${m.name}</div>` +
       `<div class="typing"><span></span><span></span><span></span></div>`;
     wrap.appendChild(body);
     $("messages").appendChild(wrap);
@@ -2711,7 +2844,7 @@
   function handleError(data, model) {
     const m = MODELS[model];
     const b = $("banner");
-    b.innerHTML = `<span class="badge sm ${m.cls}">${m.letter}</span>`;
+    b.innerHTML = badgeHTML(model);
     const msg = document.createElement("span");
     msg.textContent = errorText(data, model);   // provider text: never HTML
     b.appendChild(msg);
@@ -2824,7 +2957,7 @@
         : `${m.name} is not connected — add your ${m.keyName} key in Settings`;
       chip.onclick = () => openSettings(id);
       chip.innerHTML =
-        `<span class="badge sm ${m.cls}">${m.letter}</span>` +
+        badgeHTML(id) +
         `<span class="conn-dot"></span>` +
         `<span class="conn-text">${connected ? "Connected" : "Not connected"}</span>`;
       wrap.appendChild(chip);
@@ -3148,7 +3281,7 @@
       sec.className = "guide";
 
       const h = document.createElement("h3");
-      h.innerHTML = `<span class="badge sm ${m.cls}">${m.letter}</span>`;
+      h.innerHTML = badgeHTML(guide.model);
       h.appendChild(document.createTextNode(" " + guide.title));
       sec.appendChild(h);
 
@@ -3185,6 +3318,10 @@
 
   // =====================================================================
   //  Welcome screen — first visit, before any key is stored.
+  //
+  //  Deliberately short: headline, one-line explanation, one paragraph, one
+  //  button. The step-by-step key instructions and the privacy notice live
+  //  in Settings, which is exactly where the button goes.
   // =====================================================================
   function buildWelcome() {
     const wrap = document.createElement("div");
@@ -3216,8 +3353,6 @@
     cta.onclick = () => openSettings();
     wrap.appendChild(cta);
 
-    wrap.appendChild(buildSetupGuides());
-    wrap.appendChild(buildPrivacyNotice());
     return wrap;
   }
 
@@ -3965,6 +4100,7 @@
   // which includes every narrow/mobile screen.
   if (window.innerWidth < 1100) collapseSidebar();
 
+  upgradeStaticBadges();         // swap the literal C / G for logo files
   apiKeys = loadKeys();          // before any render: the empty state depends on it
   conversations = loadStore();
   renderSidebar();
