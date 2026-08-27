@@ -1867,9 +1867,12 @@
         <section class="privacy cost-note">
           <h3>About the cost estimates</h3>
           <p>
-            Estimated from token counts and configured rates. Your actual bill
-            may differ due to caching, tier pricing, promotional rates, or rate
-            changes. Check your provider dashboard for exact figures:
+            Estimated from token counts and configured rates. The rates are
+            taken from published provider pricing pages and are
+            <b>not confirmed against a real bill</b> — a promotional rate on a
+            public page doesn't prove your account receives it. Your bill may
+            also differ due to caching, tier pricing, or rate changes. Check
+            your provider dashboard for exact figures:
             <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>
             and
             <a href="https://platform.openai.com" target="_blank" rel="noopener noreferrer">platform.openai.com</a>.
@@ -1940,8 +1943,12 @@
   //  PRICING — the single place rates live. Update here when they change.
   // =====================================================================
   const PRICING = {
-    // USD per 1M tokens. Verified 2026-08-26 against provider pricing pages.
-    // RE-CHECK PERIODICALLY — rates change, and one of these is promotional.
+    // USD per 1M tokens. Rates below are taken from published provider pricing
+    // pages, NOT confirmed against an actual bill. A promotional rate on a
+    // public page does not prove your account receives it — your provider
+    // dashboard is the only real proof.
+    // gpt-5.6-sol is set to the promotional $4/$20; the standard rate is $5/$30.
+    // Last checked: 2026-08-26. RE-CHECK PERIODICALLY.
 
     "claude-opus-5": {
       input:      5.00,
@@ -2347,7 +2354,9 @@
     // attached while the reply is still arriving — the buttons appear once,
     // when the message is complete.
     if (rec.role === "assistant" && !rec.streaming) {
-      if (rec.truncated || rec.stopped) body.appendChild(makeCutoffNote(rec));
+      if (rec.truncated || rec.stopped || rec.interrupted) {
+        body.appendChild(makeCutoffNote(rec));
+      }
 
       const actions = document.createElement("div");
       actions.className = "actions";
@@ -2370,7 +2379,7 @@
       // Continue resumes a reply that was cut off or stopped. Only offered
       // where resuming is unambiguous: this record must be the tail of
       // `history`, i.e. the model's latest turn. See canContinue().
-      if ((rec.truncated || rec.stopped) && canContinue(rec)) {
+      if ((rec.truncated || rec.stopped || rec.interrupted) && canContinue(rec)) {
         const cont = document.createElement("button");
         cont.type = "button";
         cont.className = "act-btn continue-btn";
@@ -2403,6 +2412,7 @@
       kind: "plain",
       truncated: false,
       stopped: false,
+      interrupted: false,   // reply was cut short by a page reload
       streaming: false,
       model: null,
       usage: null,       // normalized token counts from the API, or null
@@ -2436,7 +2446,8 @@
   // reply is no longer the tail of `history` and can't be resumed cleanly.
   function refreshContinueButtons(except) {
     messages.forEach((rec) => {
-      if (rec === except || rec.role !== "assistant" || !rec.truncated) return;
+      if (rec === except || rec.role !== "assistant") return;
+      if (!rec.truncated && !rec.stopped && !rec.interrupted) return;
       const btn = rec.el && rec.el.querySelector(".continue-btn");
       if (btn && !canContinue(rec)) btn.remove();
     });
@@ -2449,7 +2460,9 @@
     const dot = document.createElement("span");
     dot.className = "cutoff-dot";
     const label = document.createElement("span");
-    label.textContent = rec && rec.stopped
+    label.textContent = rec && rec.interrupted
+      ? "Reply was cut short — the page reloaded before it finished."
+      : rec && rec.stopped
       ? "You stopped this response."
       : "Response was cut off (length limit).";
     note.appendChild(dot);
@@ -2539,7 +2552,9 @@
     addMessage({ role: "user", text: text });
     scrollDownForce();                   // a message you just sent: always jump
     history.push({ role: "user", content: text });
-    saveCurrent();                       // auto-save: no manual save button
+    // Saved BEFORE the reply is requested, on purpose: a refresh (or a crash)
+    // during the reply must never lose what you typed.
+    saveCurrent();
 
     await runPrimaryTurn();
   }
@@ -2607,6 +2622,7 @@
     // --- Streamed (possibly stopped, or failed part-way) ---------------
     rec.truncated = out.truncated;
     rec.stopped = !!out.aborted;
+    rec.interrupted = false;      // it finished (or was stopped) in this session
     rec.usage = out.usage;
     rec.apiModel = out.apiModel;
     if (out.errorMessage) handleError({ message: out.errorMessage }, model);
@@ -2705,7 +2721,8 @@
         refreshMessage(rec);             // restores the idle Continue button
         return;
       }
-      rec.text = base + data.text;
+      // Same seam handling as the streamed path.
+      rec.text = joinContinuation(base, data.text);
       rec.truncated = !!data.truncated;
       extraUsage = normalizeUsage(data.usage);
       extraModel = data.model || null;
@@ -2720,6 +2737,8 @@
 
     rec.usage = sumUsage(rec.usage, extraUsage);
     if (extraModel) rec.apiModel = extraModel;
+    // The reply has now been resumed, so it is no longer a reload casualty.
+    rec.interrupted = false;
     recordSpend(MODELS[rec.model].provider, extraModel, extraUsage);
 
     // Collapse the two API turns back into one assistant turn, so the
@@ -3598,10 +3617,12 @@
 
   // Shown as a tooltip on every figure, and in full in Settings.
   const COST_DISCLAIMER =
-    "Estimated from token counts and configured rates. Your actual bill may " +
-    "differ due to caching, tier pricing, promotional rates, or rate changes. " +
-    "Stopping a reply does not avoid charges for tokens already generated. " +
-    "Check your provider dashboard for exact figures.";
+    "Estimated from token counts and configured rates. The rates come from " +
+    "published provider pricing pages and may not match your account's actual " +
+    "billing tier. Your bill may also differ due to caching, tier pricing, " +
+    "promotional rates, or rate changes. Stopping a reply does not avoid " +
+    "charges for tokens already generated. Check your provider dashboard for " +
+    "exact figures.";
 
   // Shown instead of the above on figures we worked out ourselves, because
   // the provider never got the chance to report exact counts.
@@ -3829,6 +3850,51 @@
     renderTotals();
   }
 
+  // =====================================================================
+  //  Stitching a continuation onto a partial reply
+  //
+  //  A resumed reply arrives with no leading space, which is right when the
+  //  cut landed mid-word ("mechan" + "ism" -> "mechanism") and wrong when it
+  //  landed after punctuation ("appeared," + "including" -> glued together).
+  //
+  //  The two cases can't be told apart from letters alone, so the rule is
+  //  based on the boundary characters:
+  //    * whitespace on either side       -> nothing to do
+  //    * previous char ends a clause     -> insert one space
+  //      (, . ; : ! ? and closing brackets/quotes)
+  //    * next char starts a word/quote   -> ...and only then
+  //    * letter meeting letter           -> leave alone, it's a split word
+  //
+  //  Edit the two patterns below to tune it.
+  // =====================================================================
+  const JOIN_NEEDS_SPACE_AFTER = /[,.;:!?)\]}"'”’»…]$/;   // end of the existing text
+  const JOIN_NEEDS_SPACE_BEFORE = /^[A-Za-z0-9(\[{"'“‘«]/;  // start of the continuation
+
+  function needsJoinSpace(prev, next) {
+    if (!prev || !next) return false;
+    const a = prev[prev.length - 1];
+    const b = next[0];
+
+    // Either side already separated: leave it.
+    if (/\s/.test(a) || /\s/.test(b)) return false;
+
+    if (!JOIN_NEEDS_SPACE_AFTER.test(prev)) return false;
+    if (!JOIN_NEEDS_SPACE_BEFORE.test(next)) return false;
+
+    // Don't split a decimal number cut at the point: "3." + "14".
+    if (a === "." && /\d/.test(b) && /\d\.$/.test(prev)) return false;
+
+    return true;
+  }
+
+  // Join a continuation onto existing text, inserting a space only where the
+  // boundary needs one.
+  function joinContinuation(prev, next) {
+    if (!prev) return next || "";
+    if (!next) return prev;
+    return prev + (needsJoinSpace(prev, next) ? " " : "") + next;
+  }
+
   // Continue appends a second call to one message; its tokens are summed into
   // the message's own line so the figure reflects the whole reply.
   function sumUsage(a, b) {
@@ -3937,8 +4003,9 @@
     if (rough) {
       const flag = document.createElement("span");
       flag.className = "cost-flag";
+      // Covers both stopped replies and ones a page reload cut short.
       const n = bucketEstimated(convSpend);
-      flag.textContent = ` (${n} stopped, estimated)`;
+      flag.textContent = ` (${n} estimated)`;
       flag.title = ROUGH_DISCLAIMER;
       el.appendChild(flag);
     }
@@ -4025,6 +4092,22 @@
   //  If a stream can't be established, callers fall back to the original
   //  blocking request — see runPrimaryTurn / runCritique.
   // =====================================================================
+
+  // How often an in-progress reply is written to localStorage. Frequent
+  // enough that a refresh loses at most a second or two of text, rare enough
+  // that the synchronous write never shows up as jank.
+  const PARTIAL_SAVE_MS = 1200;
+  let lastPartialSave = 0;
+
+  // Throttled save of the conversation while a reply is still streaming.
+  // `quiet` skips the sidebar re-render, which would otherwise rebuild that
+  // DOM (and cancel an in-progress rename) every couple of seconds.
+  function persistPartial() {
+    const now = Date.now();
+    if (now - lastPartialSave < PARTIAL_SAVE_MS) return;
+    lastPartialSave = now;
+    saveCurrent({ quiet: true });
+  }
 
   // Re-parse the markdown at most this often while text is arriving.
   // Low enough to feel live, high enough not to thrash the DOM on a long
@@ -4288,13 +4371,27 @@
     let apiModel = null;
     const baseText = store.text; // Continue starts from existing text
 
+    // First chunk of a continuation may need a space inserted at the seam.
+    // For a fresh reply baseText is empty, so this is a no-op.
+    let firstChunk = true;
+
     beginStream(controller, source);
 
     const result = await openStream(payload, {
       signal: controller.signal,
       onDelta: (chunk) => {
-        store.text += chunk;
+        if (firstChunk) {
+          firstChunk = false;
+          store.text = joinContinuation(store.text, chunk);
+        } else {
+          store.text += chunk;
+        }
         painter.schedule();
+
+        // Persist the partial reply as it arrives, so a refresh mid-stream
+        // doesn't lose it. Throttled hard: localStorage writes are
+        // synchronous and must never run per delta.
+        if (source === "chat") persistPartial();
       },
       onDone: (tr, u, model) => {
         truncated = tr;
@@ -4302,9 +4399,10 @@
         if (typeof model === "string") apiModel = model;
       },
       onUsage: (u, model) => {
-        if (typeof model === "string") apiModel = model;
+        if (typeof model === "string") { apiModel = model; store.apiModel = model; }
         const partial = normalizeUsage(u);
-        if (partial) partialUsage = partial;
+        // Kept on the record too, so a mid-stream save can price the partial.
+        if (partial) { partialUsage = partial; store.partialUsage = partial; }
       },
       onError: (msg) => { errorMessage = msg; },
     });
@@ -4416,6 +4514,7 @@
           text: m.text,
           truncated: !!m.truncated,
           stopped: !!m.stopped,
+          interrupted: !!m.interrupted,
           usage: normalizeUsage(m.usage),
           apiModel: typeof m.apiModel === "string" ? m.apiModel : null,
         })),
@@ -4467,7 +4566,8 @@
   // --- Saving the open conversation ----------------------------------
   // Called after every message, rename, and continuation. There is no
   // manual save button by design.
-  function saveCurrent() {
+  // opts.quiet — skip the sidebar re-render (used by the mid-stream throttle).
+  function saveCurrent(opts = {}) {
     if (!messages.length) return;            // nothing worth a slot yet
 
     const now = Date.now();
@@ -4489,6 +4589,14 @@
     if (!conv.titleCustom) conv.title = autoTitle();
 
     // Snapshot both views (plain objects only — no DOM nodes).
+    // A reply still in flight is saved as an in-progress placeholder. On the
+    // next load it comes back marked `interrupted`, with the same notice and
+    // Continue affordance a stopped reply gets.
+    const pending = messages[messages.length - 1];
+    const isPending =
+      pending && pending.role === "assistant" && !!pending.streaming;
+    const pendingUsage = isPending ? pendingUsageFor(pending) : null;
+
     conv.messages = messages.map((m) => ({
       role: m.role,
       model: m.model,
@@ -4496,16 +4604,55 @@
       text: m.text,
       truncated: !!m.truncated,
       stopped: !!m.stopped,
-      usage: m.usage || null,        // token counts only — never keys
+      // Sticky: stays set until the message is actually continued.
+      interrupted: !!(m.streaming || m.interrupted),
+      usage: (m === pending && pendingUsage ? pendingUsage : m.usage) || null,
       apiModel: m.apiModel || null,
     }));
-    conv.history = history.map((h) => ({ role: h.role, content: h.content }));
+
+    // `history` doesn't contain a streaming reply yet — it's pushed when the
+    // stream completes. Persist the partial turn anyway, so a restored
+    // conversation is one the model can actually continue from.
+    const historySnapshot = history.map((h) => ({ role: h.role, content: h.content }));
+    if (isPending && pending.text) {
+      const tail = historySnapshot[historySnapshot.length - 1];
+      if (!tail || tail.role !== "assistant") {
+        historySnapshot.push({ role: "assistant", content: pending.text });
+      }
+    }
+    conv.history = historySnapshot;
+
     // Running subtotal for this conversation, so a reload restores it rather
     // than recomputing (which would miss critiques never sent back).
-    conv.spend = convSpend;
+    // A pending reply's estimate is added fresh on every save rather than
+    // accumulated into convSpend, so repeated saves can't double-count it.
+    if (isPending && pendingUsage) {
+      const snapshot = normalizeSpendBucket(convSpend);
+      addUsageToBucket(
+        snapshot,
+        MODELS[pending.model].provider,
+        pending.apiModel,
+        pendingUsage
+      );
+      conv.spend = snapshot;
+    } else {
+      conv.spend = convSpend;
+    }
 
     writeStore();
-    renderSidebar();
+    if (!opts.quiet) renderSidebar();
+  }
+
+  // Best-effort usage for a reply that is still streaming. Same machinery as
+  // a stopped reply, because the situation is the same: tokens have been
+  // generated and billed, the provider just hasn't reported counts yet.
+  function pendingUsageFor(rec) {
+    if (!rec || !rec.text) return null;
+    return estimateStoppedUsage({
+      knownInput: rec.partialUsage || null,
+      receivedText: rec.text,
+      payload: { messages: history },
+    });
   }
 
   function newConversationId() {
@@ -4586,6 +4733,7 @@
         kind: m.kind,
         truncated: m.truncated,
         stopped: m.stopped,
+        interrupted: m.interrupted,
         usage: m.usage,
         apiModel: m.apiModel,
       })
