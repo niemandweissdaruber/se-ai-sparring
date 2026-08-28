@@ -406,9 +406,28 @@ const SERANKING_TOOL_LABELS = {
 
 // Defence in depth for the Cloudflare Access requirement. Access terminates in
 // front of this Worker and stamps every authenticated request with a JWT
-// header; a request without one never went through it. Set to false only for
-// local `wrangler pages dev`, where there is no Access in front.
+// header; a request without one never went through it.
+//
+// localhost is always exempt (there is no Access in front of a dev server).
+//
+// A deployment that has NOT set up Access yet can opt out explicitly by
+// setting the env var ALLOW_MCP_WITHOUT_ACCESS=true. That is a deliberate,
+// risk-accepted choice, not a default: without Access, anyone who finds the
+// URL can use this app and spend SE Ranking credits on the operator's key
+// (they bring their own provider key, but not ours). Remove the variable the
+// moment Access is in place — and remember Access must BYPASS /api/mcp/*, or
+// Anthropic's server-to-server calls to the proxy will be challenged.
 const ENFORCE_ACCESS_JWT = true;
+
+function accessCheckRequired(env, request) {
+  if (!ENFORCE_ACCESS_JWT) return false;
+  if (isLocalRequest(request)) return false;
+  const optOut = env && env.ALLOW_MCP_WITHOUT_ACCESS;
+  if (typeof optOut === "string" && optOut.trim().toLowerCase() === "true") {
+    return false;
+  }
+  return true;
+}
 
 // Decide whether MCP should be attached to this request, and why not if not.
 // Returns { enabled, key?, proxyUrl?, proxySecret?, error? } — `error` is a
@@ -434,8 +453,8 @@ function resolveMcp({ useMcp, env, request, provider }) {
   }
 
   // Cloudflare Access puts this header on every request it lets through.
-  // localhost has no Access in front of it, so it is exempt.
-  if (ENFORCE_ACCESS_JWT && !isLocalRequest(request)) {
+  // See accessCheckRequired() for the localhost and opt-out exemptions.
+  if (accessCheckRequired(env, request)) {
     const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
     if (!jwt) {
       return {

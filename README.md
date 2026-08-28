@@ -225,6 +225,14 @@ only ever talk to one fixed upstream, the SE Ranking key it uses is restricted a
 read-only, and the Anthropic toolset exposes only the five whitelisted tools. Keep
 Access enforcing on every other path, `/api/chat` included.
 
+#### Running before Access is set up
+
+A deployment that hasn't configured Access yet can opt out of the JWT check with
+`ALLOW_MCP_WITHOUT_ACCESS=true`. That is a deliberate, risk-accepted setting, not a
+default: **without Access, anyone who finds the URL can use the app and spend SE
+Ranking credits on your key** (they bring their own provider key, but not yours).
+Delete the variable the moment Access is in place.
+
 As defence in depth the chat Function also rejects MCP-enabled requests that arrive
 without Cloudflare Access's `Cf-Access-Jwt-Assertion` header — so if Access is ever
 removed or misconfigured, the toggle stops working rather than quietly leaking the
