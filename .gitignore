@@ -1,6 +1,8 @@
 # Cloudflare local dev secrets — NEVER commit these.
 .dev.vars
 .dev.vars.*
+# ...except the placeholder template, which documents the required env vars.
+!.dev.vars.example
 
 # Wrangler / Cloudflare
 .wrangler/

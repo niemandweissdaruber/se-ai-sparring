@@ -1,0 +1,23 @@
+# Copy this file to `.dev.vars` and fill in your real keys.
+# `.dev.vars` is gitignored — your keys never get committed.
+# Wrangler loads `.dev.vars` automatically for `wrangler pages dev`.
+
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+OPENAI_API_KEY=sk-your-openai-key-here
+
+# OPTIONAL — enables the "SE Ranking data" toggle.
+# Use a RESTRICTED, READ-ONLY SE Ranking API key: it is handed to OpenAI and
+# Anthropic so they can call SE Ranking's MCP server directly. It is never sent
+# to the browser. In production this belongs in Cloudflare's encrypted
+# environment variables, and the deployment must sit behind Cloudflare Access.
+SERANKING_API_KEY=your-read-only-se-ranking-key
+
+# OPTIONAL — required only for Claude grounding, which routes through our own
+# MCP proxy at /api/mcp/seranking (Anthropic's connector can only send a Bearer,
+# and SE Ranking needs X-Api-Key). Any long random string; rotate freely.
+#   python3 -c "import secrets;print(secrets.token_urlsafe(32))"
+MCP_PROXY_SECRET=any-long-random-string
+
+# Production only: absolute URL of the deployed proxy. Omit locally — it falls
+# back to the request's own origin.
+# MCP_PROXY_URL=https://your-app.pages.dev/api/mcp/seranking

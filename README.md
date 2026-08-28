@@ -21,7 +21,8 @@ Claude uses a warm amber accent, ChatGPT a green one. No real company logos — 
 | Path | What it is |
 |------|-----------|
 | `index.html` | The entire frontend — inline CSS + JS, no build step, no npm. |
-| `functions/api/chat.js` | A Cloudflare Pages Function. Forwards each call to the provider using the key from the request header. Holds no keys of its own. |
+| `functions/api/chat.js` | A Cloudflare Pages Function. Forwards each call to the provider using the key from the request header. Holds no provider keys of its own. |
+| `assets/` | Provider logo files (see `assets/README.md`). |
 | `README.md` | This file. |
 
 **Where keys live:** in each user's own browser (`localStorage`), never on the server. Every
@@ -112,3 +113,168 @@ two models keep each other honest.
 
 - Conversation state is kept **in memory only** (v1). Refreshing the page starts a fresh conversation. No database, no `localStorage`.
 - The code is heavily commented — tweak it by hand freely.
+
+---
+
+## SE Ranking data (optional grounding)
+
+A header toggle, **SE Ranking data**, off by default. When it's on, every generation
+turn — the initial answer, the second opinion, the rebuttal, and any follow-up — is
+allowed to call SE Ranking's MCP server, so both models reason over real SEO data
+instead of memory. When it's off the app behaves exactly as it did before: no MCP
+fields are added to either provider request and no connection to SE Ranking is made.
+
+Both providers connect to `https://api.seranking.com/mcp` **directly**. This app is
+not a proxy — it only supplies the credential.
+
+### How each provider connects
+
+SE Ranking's MCP server does not accept a static API key as a bearer token — the MCP
+`initialize` handshake returns **401** and points at an OAuth flow it wants instead.
+The same key authenticates the whole session when sent as **`X-Api-Key`**. The two
+providers differ in whether they can do that:
+
+| Provider | Route | Auth |
+|---|---|---|
+| **ChatGPT** | Direct to `api.seranking.com/mcp` | `X-Api-Key` — OpenAI's MCP tool accepts arbitrary `headers` |
+| **Claude** | Through our own proxy at `/api/mcp/seranking` | Bearer `MCP_PROXY_SECRET` in, swapped for `X-Api-Key` out |
+
+Anthropic's connector can only send `authorization_token` (always as a Bearer) and
+rejects a custom `headers` field outright — *"mcp_servers.0.headers: Extra inputs are
+not permitted"*. Its OAuth server advertises only `authorization_code` and
+`refresh_token` grants (no `client_credentials`), so a token can't be minted
+non-interactively either. The proxy exists solely to bridge that gap.
+
+**`functions/api/mcp/seranking.js`** is a transparent MCP passthrough, not an open
+proxy:
+
+* The upstream is a **fixed constant**. There is no caller-supplied target, no path
+  passthrough, no query-driven destination.
+* Every request must present `Authorization: Bearer <MCP_PROXY_SECRET>` — a wrong
+  secret, a missing header, or even SE Ranking's own key all get a flat 401.
+* The incoming `Authorization` is **deleted** before forwarding (a Bearer reaching SE
+  Ranking is exactly what 401s), and `X-Api-Key` is set from `SERANKING_API_KEY`.
+  `Host`, `cf-*` and the Cloudflare Access JWT are stripped too.
+* `Mcp-Session-Id`, `Mcp-Protocol-Version`, `Accept` and `Content-Type` pass through
+  in **both** directions, and the upstream response is returned unread so
+  `text/event-stream` streams unbuffered. POST, GET and DELETE are all forwarded.
+* Neither secret ever appears in a response body or a log line.
+
+> **Claude grounding is only verifiable on a deployed URL.** Anthropic calls the proxy
+> from its own cloud, which cannot reach `localhost`. With the toggle on against a
+> local dev server, Claude turns return a clear message saying so rather than hanging.
+> ChatGPT grounding works anywhere, including locally.
+
+### The SE Ranking key is server-side only
+
+`SERANKING_API_KEY` lives in the Cloudflare environment and is used only inside the
+provider request bodies. It is never sent to the browser, never logged, and never
+part of any response the Function returns. There is no SE Ranking field in Settings,
+because the browser never sees that key.
+
+**Use a restricted, read-only SE Ranking API key.** SE Ranking supports read-only
+keys — issue one for this deployment rather than reusing a full-access key.
+
+### Read-only twice over
+
+Beyond the key's own restrictions, the tool surface is locked down in code. The MCP
+server publishes **217** tools, **84** of which mutate account data
+(`create*`, `add*`, `update*`, `delete*`, `move*`, `share*`, `import*`, `recheck*`,
+`run*`, `set*`). None of them is reachable. Exactly five read-only tools are exposed,
+listed in one constant (`SERANKING_TOOLS` in `functions/api/chat.js`) and shared by
+both providers:
+
+| Tool | Covers |
+|------|--------|
+| `DATA_getDomainOverviewByCountry` | Domain overview, per country/database |
+| `DATA_getDomainKeywords` | Organic keywords a domain ranks for |
+| `DATA_getKeywordsMetrics` | Keyword research — volume, KD, CPC, intent |
+| `DATA_getBacklinksSummary` | Backlink profile summary |
+| `DATA_getAiSearchOverview` | AI search visibility |
+
+Every name was taken verbatim from a live `tools/list` against the server — none is
+guessed. If you add one, confirm the exact name the same way and confirm it only
+reads. Anthropic is additionally configured deny-by-default
+(`default_config: { enabled: false }`), so a tool that isn't on the list cannot be
+called even if the server starts advertising it.
+
+> **`DATA_getSerpResults` is deliberately excluded.** It queues a SERP task
+> server-side, consumes SERP credits, and polls for up to five minutes — long enough
+> to stall a generation turn. Every tool above returns immediately from stored data.
+
+### Required deploy step: put it behind Cloudflare Access
+
+This tool exposes a company SE Ranking key to whoever can reach the page, so the
+deployment **must** sit behind Cloudflare Access, restricted to SE Ranking company
+accounts.
+
+1. Cloudflare dashboard → **Zero Trust → Access → Applications → Add an application**.
+2. Type **Self-hosted**, pointed at this Pages deployment's domain.
+3. Add a policy: **Allow**, with an *Emails ending in* rule for your company domain
+   (or an identity-provider group). Do not leave a bypass policy in place.
+4. Save, then confirm an incognito window is challenged before the page loads.
+
+#### ⚠️ Access must BYPASS `/api/mcp/*`
+
+Anthropic calls the proxy **server-to-server from its own cloud** and cannot complete
+an interactive login, so an Access policy covering that path breaks Claude grounding.
+Add a second policy to the same application:
+
+* **Action:** Bypass · **Include:** Everyone · **Path:** `/api/mcp/*`
+
+That path is not left unprotected. It requires the bearer `MCP_PROXY_SECRET`, it can
+only ever talk to one fixed upstream, the SE Ranking key it uses is restricted and
+read-only, and the Anthropic toolset exposes only the five whitelisted tools. Keep
+Access enforcing on every other path, `/api/chat` included.
+
+As defence in depth the chat Function also rejects MCP-enabled requests that arrive
+without Cloudflare Access's `Cf-Access-Jwt-Assertion` header — so if Access is ever
+removed or misconfigured, the toggle stops working rather than quietly leaking the
+key's capabilities. `localhost` is exempt so local development still works. The
+switch is `ENFORCE_ACCESS_JWT` in `functions/api/chat.js`.
+
+### Configuring the keys
+
+Three variables, all **encrypted** (Secret) in production:
+
+| Variable | Needed for | Notes |
+|---|---|---|
+| `SERANKING_API_KEY` | Both providers | Restricted, read-only SE Ranking key |
+| `MCP_PROXY_SECRET` | Claude only | Any random string; rotate freely |
+| `MCP_PROXY_URL` | Claude, production | Absolute URL of the deployed proxy, e.g. `https://your-app.pages.dev/api/mcp/seranking`. Omit and it falls back to the request's own origin, which is what makes preview deployments work unconfigured. |
+
+**Production** — Cloudflare dashboard → **Workers & Pages → your project → Settings
+→ Environment variables**, then redeploy.
+
+**Local development** — add them to `.dev.vars`:
+
+```
+SERANKING_API_KEY=your-read-only-se-ranking-key
+MCP_PROXY_SECRET=any-long-random-string
+```
+
+Generate a secret with `python3 -c "import secrets;print(secrets.token_urlsafe(32))"`.
+
+If Claude grounding is requested and `MCP_PROXY_SECRET` is missing, the app says so
+plainly — ChatGPT turns are unaffected.
+
+If the toggle is on and no key is configured, the app says so plainly instead of
+quietly answering without the data you asked for.
+
+### Cost and latency
+
+Tool results come back as ordinary input tokens, so they're billed like any other
+tokens and the existing cost tracking already covers them. Expect **noticeably higher
+cost and latency** when tools fire — and "noticeably" is doing real work in that
+sentence. A measured example, the acceptance query answered by ChatGPT:
+
+| | Toggle off | Toggle on |
+|---|---|---|
+| Input tokens | ~20 | **141,263** (one turn, uncached) |
+| Cost of that turn | ~$0.01 | **~$0.57** |
+
+A full answer → critique → rebuttal cycle on that query cost **~$0.36** with caching
+helping on later turns. Budget accordingly, and leave the toggle off for questions
+that don't need live data. A small chip (`🔧 SE Ranking · organic keywords`) appears above
+each reply that used live data, so it's always visible when a turn was grounded.
+

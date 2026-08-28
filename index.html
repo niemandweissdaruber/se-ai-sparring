@@ -1309,6 +1309,74 @@
       .legal { text-align: center; }
     }
 
+    /* ===================================================================
+       SE Ranking grounding. All new rules are prefixed .mcp- so they can't
+       collide with anything else in this stylesheet.
+       =================================================================== */
+    .mcp-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      flex: none;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-faint);
+      background: var(--bg-1);
+      border: 1px solid var(--border-soft);
+      padding: 6px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      white-space: nowrap;
+    }
+    .mcp-toggle:hover { color: var(--text-dim); border-color: var(--border); }
+
+    .mcp-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--text-faint);
+      flex: none;
+      transition: all 0.18s ease;
+    }
+    /* On: a clear, live-looking state — this costs money when it fires. */
+    .mcp-toggle.on {
+      color: var(--text);
+      border-color: #4c8dff;
+      background: rgba(76, 141, 255, 0.12);
+    }
+    .mcp-toggle.on .mcp-dot {
+      background: #4c8dff;
+      box-shadow: 0 0 7px 1px rgba(76, 141, 255, 0.7);
+    }
+
+    /* Tool-call chips, above the reply text. Muted metadata, same weight as
+       the usage line — never competing with the answer. */
+    .mcp-tools {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0 0 7px;
+    }
+    .mcp-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-faint);
+      background: var(--bg-1);
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      padding: 3px 9px;
+      cursor: help;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      animation: fadein 0.25s ease both;
+    }
+    .mcp-chip-icon { font-size: 10px; line-height: 1; }
+
+    .mcp-card-wrap { display: block; }
+
     /* ---- Streaming caret --------------------------------------------- */
     /* Our own element, appended after sanitization — never model output. */
     .stream-cursor {
@@ -1602,6 +1670,8 @@
 
       .toggle button span.label { display: none; } /* keep badges only */
       .conn-text { display: none; }                /* dot + badge only */
+      .mcp-label { display: none; }                /* dot only */
+      .mcp-toggle { padding: 6px 9px; }
       .conn-chip { padding: 4px 7px 4px 5px; }
       .header-right { gap: 7px; }
       .brand span { white-space: nowrap; }         /* never wrap to two lines */
@@ -1681,6 +1751,14 @@
             <span class="label">ChatGPT primary</span>
           </button>
         </div>
+
+        <!-- Optional SE Ranking grounding. Off by default; no key here —
+             the credential is server-side only. -->
+        <button class="mcp-toggle" id="mcp-toggle" onclick="toggleMcp()"
+                aria-pressed="false" aria-label="Toggle SE Ranking data">
+          <span class="mcp-dot"></span>
+          <span class="mcp-label">SE Ranking data</span>
+        </button>
 
         <button class="sidebar-toggle gear" onclick="openSettings()"
                 title="Settings — your API keys" aria-label="Settings">
@@ -2347,6 +2425,9 @@
     const body = document.createElement("div");
     body.className = "body";
     body.appendChild(meta);
+    // SE Ranking calls this reply made, above the text. Absent when none.
+    const chips = buildToolChips(rec.tools);
+    if (chips) body.appendChild(chips);
     body.appendChild(bubble);
 
     // Every model message gets an action row: Second opinion + Copy
@@ -2417,6 +2498,7 @@
       model: null,
       usage: null,       // normalized token counts from the API, or null
       apiModel: null,    // exact provider model ID, for the PRICING lookup
+      tools: null,       // [{server,name}] SE Ranking calls this reply made
       ...rec,
     };
     messages.push(record);
@@ -2525,7 +2607,9 @@
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: providerHeaders(payload.provider),
-      body: JSON.stringify(payload),
+      // withMcp() is applied here (and in openStream) so EVERY generation
+      // turn picks up the toggle without each call site remembering to.
+      body: JSON.stringify(withMcp(payload)),
     });
     return res.json();
   }
@@ -2795,10 +2879,16 @@
     const card = document.createElement("div");
     card.className = "critique-card";
 
+    // Wrapper so the tool chips can sit above the card and survive the
+    // markdown repaints that replace the card's contents.
+    const cardWrap = document.createElement("div");
+    cardWrap.className = "mcp-card-wrap";
+    cardWrap.appendChild(card);
+
     const bodyEl = $("panel-body");
     bodyEl.innerHTML = "";
     bodyEl.appendChild(ctx);
-    bodyEl.appendChild(card);
+    bodyEl.appendChild(cardWrap);
     panelScroller.reset();
 
     // streamText mutates .text on this object as chunks arrive.
@@ -2984,6 +3074,8 @@
       truncated: !!lastCritique.truncated,
       usage: lastCritique.usage,
       apiModel: lastCritique.apiModel,
+      // Any SE Ranking calls the critique made travel with it into the thread.
+      tools: normalizeToolCalls(lastCritique.tools),
     });
 
     // Feed the critique into the main chat as a new user turn, framed so the
@@ -3605,6 +3697,146 @@
   }
 
   // =====================================================================
+  //  SE Ranking grounding (optional)
+  //
+  //  A header toggle, off by default. When ON, every generation turn —
+  //  initial answer, critique, rebuttal, continuation — carries
+  //  `useMcp: true`, and the server attaches SE Ranking's MCP server to that
+  //  provider request. When OFF, nothing is added anywhere and the request is
+  //  identical to one from before this feature existed.
+  //
+  //  There is NO SE Ranking key in the browser. The credential lives only in
+  //  the Worker's environment; the toggle is the only control here.
+  // =====================================================================
+
+  // Its own storage key, deliberately separate from the conversation store:
+  // this is a UI preference, not conversation content.
+  const MCP_STORE_KEY = "aivsai.seranking";
+  let mcpEnabled = false;
+
+  function loadMcpPreference() {
+    try {
+      return localStorage.getItem(MCP_STORE_KEY) === "on";
+    } catch (err) {
+      console.warn("Could not read the SE Ranking preference.", err);
+      return false;                         // off is the safe default
+    }
+  }
+
+  function writeMcpPreference() {
+    try {
+      localStorage.setItem(MCP_STORE_KEY, mcpEnabled ? "on" : "off");
+    } catch (err) {
+      console.warn("Could not save the SE Ranking preference.", err);
+    }
+  }
+
+  function toggleMcp() {
+    mcpEnabled = !mcpEnabled;
+    writeMcpPreference();
+    renderMcpToggle();
+  }
+
+  function renderMcpToggle() {
+    const btn = $("mcp-toggle");
+    if (!btn) return;
+    btn.classList.toggle("on", mcpEnabled);
+    btn.setAttribute("aria-pressed", mcpEnabled ? "true" : "false");
+    // Both models can ground now — ChatGPT direct, Claude via our own MCP
+    // proxy. The one caveat worth surfacing: Anthropic calls that proxy from
+    // its own cloud, so Claude grounding needs a deployed URL, not localhost.
+    btn.title = mcpEnabled
+      ? "SE Ranking data is ON — both models may look up live SEO data for " +
+        "every answer, critique and rebuttal. Claude reaches it through this " +
+        "app's own proxy, which needs a deployed URL (it can't work against a " +
+        "local dev server); ChatGPT works anywhere. Expect slower replies and " +
+        "much higher token cost."
+      : "SE Ranking data is OFF — models answer from their own knowledge only.";
+  }
+
+  // Stamped onto every generation request. Kept in one place so a new call
+  // site can't accidentally miss it — and so OFF adds no field at all rather
+  // than sending `useMcp: false`.
+  function withMcp(payload) {
+    return mcpEnabled ? { ...payload, useMcp: true } : payload;
+  }
+
+  // --- Tool-call chips -------------------------------------------------
+  // The server emits {type:"tool", server, name} when a call starts. Only the
+  // fact and the name travel — never arguments or results.
+  //
+  // Chips live in their own row ABOVE the bubble rather than inside it: the
+  // bubble's innerHTML is replaced on every markdown repaint, so anything
+  // inside it would be wiped mid-stream.
+  function recordToolCall(store, evt) {
+    if (!store) return;
+    if (!Array.isArray(store.tools)) store.tools = [];
+    store.tools.push({
+      server: typeof evt.server === "string" ? evt.server : "se_ranking",
+      name: typeof evt.name === "string" ? evt.name : "tool",
+    });
+  }
+
+  // Stored tool lists get the same defensive treatment as everything else:
+  // anything malformed becomes null rather than rendering junk.
+  function normalizeToolCalls(raw) {
+    if (!Array.isArray(raw)) return null;
+    const list = raw
+      .filter((t) => t && typeof t === "object" && typeof t.name === "string")
+      .map((t) => ({
+        server: typeof t.server === "string" ? t.server : "se_ranking",
+        name: t.name,
+      }));
+    return list.length ? list : null;
+  }
+
+  // Build (or refresh) the chip row for a list of calls. Returns null when
+  // there are none, so nothing is added to messages that used no tools.
+  function buildToolChips(tools) {
+    if (!Array.isArray(tools) || !tools.length) return null;
+    const row = document.createElement("div");
+    row.className = "mcp-tools";
+
+    // A model often calls the same tool several times in one turn (paging,
+    // retries, a second lookup). Collapse those into one chip with a count
+    // instead of a row of identical chips.
+    const counted = [];
+    tools.forEach((t) => {
+      const last = counted[counted.length - 1];
+      if (last && last.name === t.name && last.server === t.server) last.n += 1;
+      else counted.push({ ...t, n: 1 });
+    });
+
+    counted.forEach((t) => {
+      const chip = document.createElement("span");
+      chip.className = "mcp-chip";
+      chip.title = "This answer used live SE Ranking data.";
+      // textContent throughout: the tool name comes from the server, but it
+      // is still never trusted as markup.
+      const icon = document.createElement("span");
+      icon.className = "mcp-chip-icon";
+      icon.textContent = "🔧";
+      chip.appendChild(icon);
+      chip.appendChild(
+        document.createTextNode(` SE Ranking · ${t.name}${t.n > 1 ? ` ×${t.n}` : ""}`)
+      );
+      row.appendChild(chip);
+    });
+    return row;
+  }
+
+  // Live update during streaming: the chip row sits before the bubble and is
+  // rebuilt in place as calls fire.
+  function refreshToolChips(container, tools) {
+    if (!container) return;
+    const existing = container.querySelector(".mcp-tools");
+    const fresh = buildToolChips(tools);
+    if (existing && fresh) existing.replaceWith(fresh);
+    else if (existing && !fresh) existing.remove();
+    else if (fresh) container.prepend(fresh);
+  }
+
+  // =====================================================================
   //  Token + cost tracking
   //
   //  Everything here is driven by the token counts the provider APIs already
@@ -4123,13 +4355,13 @@
   //             NOT retry with the blocking path
   //   json    — the server answered with ordinary JSON instead of a stream
   //             (a missing key, say); hand it back rather than re-requesting
-  async function openStream(payload, { onDelta, onDone, onError, onUsage, signal }) {
+  async function openStream(payload, { onDelta, onDone, onError, onUsage, onTool, signal }) {
     let res;
     try {
       res = await fetch("/api/chat", {
         method: "POST",
         headers: providerHeaders(payload.provider),
-        body: JSON.stringify({ ...payload, stream: true }),
+        body: JSON.stringify({ ...withMcp(payload), stream: true }),
         signal,
       });
     } catch (err) {
@@ -4162,6 +4394,9 @@
       // Early, best-effort usage + model. Arrives before any abort, which is
       // the whole point of it — see the server's note on this event.
       else if (evt.type === "usage" && onUsage) onUsage(evt.usage, evt.model);
+      // An MCP tool call started. Informational only — no arguments, no
+      // results, so it can never contaminate the assistant text.
+      else if (evt.type === "tool" && onTool) onTool(evt);
       else if (evt.type === "error") onError(evt.message || "Something went wrong.");
     };
 
@@ -4404,6 +4639,12 @@
         // Kept on the record too, so a mid-stream save can price the partial.
         if (partial) { partialUsage = partial; store.partialUsage = partial; }
       },
+      onTool: (evt) => {
+        // Chips appear as calls fire, which is the point: the reader can see
+        // the model reaching for real data before the text arrives.
+        recordToolCall(store, evt);
+        refreshToolChips(el.parentElement, store.tools);
+      },
       onError: (msg) => { errorMessage = msg; },
     });
 
@@ -4517,6 +4758,7 @@
           interrupted: !!m.interrupted,
           usage: normalizeUsage(m.usage),
           apiModel: typeof m.apiModel === "string" ? m.apiModel : null,
+          tools: normalizeToolCalls(m.tools),
         })),
       history: c.history
         .filter((h) => h && typeof h.content === "string" &&
@@ -4608,6 +4850,7 @@
       interrupted: !!(m.streaming || m.interrupted),
       usage: (m === pending && pendingUsage ? pendingUsage : m.usage) || null,
       apiModel: m.apiModel || null,
+      tools: Array.isArray(m.tools) && m.tools.length ? m.tools : null,
     }));
 
     // `history` doesn't contain a streaming reply yet — it's pushed when the
@@ -4736,6 +4979,7 @@
         interrupted: m.interrupted,
         usage: m.usage,
         apiModel: m.apiModel,
+        tools: m.tools,
       })
     );
     renderChatCost();
@@ -4958,6 +5202,8 @@
   if (window.innerWidth < 1100) collapseSidebar();
 
   upgradeStaticBadges();         // swap the literal C / G for logo files
+  mcpEnabled = loadMcpPreference();
+  renderMcpToggle();
   apiKeys = loadKeys();          // before any render: the empty state depends on it
   allTimeSpend = loadAllTimeSpend();
   conversations = loadStore();

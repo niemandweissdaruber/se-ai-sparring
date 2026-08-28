@@ -83,7 +83,8 @@ export async function onRequestPost(context) {
     return json({ error: "bad_request", message: "Invalid JSON body." }, 400);
   }
 
-  const { provider, mode, messages, question, targetText, stream } = body || {};
+  const { provider, mode, messages, question, targetText, stream, useMcp } =
+    body || {};
 
   // Validate provider.
   if (provider !== "anthropic" && provider !== "openai") {
@@ -108,6 +109,17 @@ export async function onRequestPost(context) {
   const builtMessages = buildMessages({ mode, messages, question, targetText });
   const system = SYSTEM_PROMPTS[mode];
 
+  // Optional SE Ranking grounding. `mcp.enabled` is false unless the client
+  // asked for it AND the deployment is configured for it — when false, not a
+  // single MCP field is added below, so the request is identical to one from
+  // before this feature existed.
+  const mcp = resolveMcp({ useMcp, env: context.env, request, provider });
+  if (mcp.error) {
+    // Misconfiguration or an unauthenticated caller: say so plainly instead
+    // of quietly answering without the data that was asked for.
+    return json({ error: "mcp_unavailable", provider, message: mcp.error }, 200);
+  }
+
   // Streaming path. Only an explicit `stream: true` opts in — everything
   // else keeps the original blocking behaviour, which is what the client
   // falls back to if a stream can't be established.
@@ -121,6 +133,7 @@ export async function onRequestPost(context) {
       apiKey,
       system,
       messages: builtMessages,
+      mcp,
     });
   }
 
@@ -131,9 +144,9 @@ export async function onRequestPost(context) {
     // notice and offers a "Continue" button.
     let result;
     if (provider === "anthropic") {
-      result = await callAnthropic({ apiKey, system, messages: builtMessages });
+      result = await callAnthropic({ apiKey, system, messages: builtMessages, mcp });
     } else {
-      result = await callOpenAI({ apiKey, system, messages: builtMessages });
+      result = await callOpenAI({ apiKey, system, messages: builtMessages, mcp });
     }
     // `usage` is the normalized token count (or null when the provider didn't
     // give us a usable one) and `model` is the exact model ID that served the
@@ -208,7 +221,7 @@ function buildMessages({ mode, messages, question, targetText }) {
 // ---------------------------------------------------------------------------
 // Anthropic REST call — POST /v1/messages
 // ---------------------------------------------------------------------------
-async function callAnthropic({ apiKey, system, messages }) {
+async function callAnthropic({ apiKey, system, messages, mcp }) {
   const payload = {
     model: CONFIG.anthropic.model,
     max_tokens: CONFIG.anthropic.maxTokens,
@@ -217,13 +230,26 @@ async function callAnthropic({ apiKey, system, messages }) {
   // Anthropic takes the system prompt as a top-level field, not a message.
   if (system) payload.system = system;
 
+  const headers = {
+    "content-type": "application/json",
+    "x-api-key": apiKey,
+    "anthropic-version": CONFIG.anthropic.version,
+  };
+
+  // Server + toolset go in together or not at all (the API requires every
+  // mcp_servers entry to be referenced by exactly one mcp_toolset).
+  // Claude is pointed at our proxy — see ANTHROPIC_MCP_SUPPORTED.
+  if (mcp && mcp.enabled && ANTHROPIC_MCP_SUPPORTED && mcp.proxyUrl) {
+    Object.assign(
+      payload,
+      anthropicMcpFields({ url: mcp.proxyUrl, token: mcp.proxySecret })
+    );
+    headers["anthropic-beta"] = ANTHROPIC_MCP_BETA;
+  }
+
   const res = await fetch(CONFIG.anthropic.apiUrl, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": CONFIG.anthropic.version,
-    },
+    headers,
     body: JSON.stringify(payload),
   });
 
@@ -259,7 +285,7 @@ async function callAnthropic({ apiKey, system, messages }) {
 //   - the token cap is `max_output_tokens`, not `max_tokens`
 //   - reasoning effort is set via `reasoning: { effort }`
 // ---------------------------------------------------------------------------
-async function callOpenAI({ apiKey, system, messages }) {
+async function callOpenAI({ apiKey, system, messages, mcp }) {
   const payload = {
     model: CONFIG.openai.model,
     input: messages, // [{ role: "user" | "assistant", content: "..." }]
@@ -269,6 +295,8 @@ async function callOpenAI({ apiKey, system, messages }) {
   if (CONFIG.openai.reasoningEffort) {
     payload.reasoning = { effort: CONFIG.openai.reasoningEffort };
   }
+  // MCP is just another tool entry for the Responses API.
+  if (mcp && mcp.enabled) payload.tools = [openAiMcpTool(mcp.key)];
 
   const res = await fetch(CONFIG.openai.apiUrl, {
     method: "POST",
@@ -321,6 +349,271 @@ function extractOpenAIText(data) {
     }
   }
   return parts.join("").trim();
+}
+
+// ---------------------------------------------------------------------------
+// SE RANKING MCP (optional grounding)
+//
+// When the client sends `useMcp: true`, both providers are pointed at SE
+// Ranking's MCP server DIRECTLY — there is no proxy here. This Worker only
+// supplies the credential, which is why that credential must never leave it.
+//
+// SECURITY CONTRACT — do not weaken any of these:
+//   1. SERANKING_API_KEY is read from the Cloudflare environment and used ONLY
+//      inside the provider request bodies below. It is never echoed to the
+//      client, never logged (redact() covers the log paths), and never part of
+//      any response this function returns.
+//   2. Use a RESTRICTED, READ-ONLY SE Ranking key. See README.
+//   3. Read-only again at the tool layer: only the whitelist below is exposed.
+//      The server publishes 217 tools, 84 of which mutate account data
+//      (create/add/update/delete/move/share/import/recheck/run/set). None of
+//      them is reachable, for either provider.
+//   4. The deployment sits behind Cloudflare Access. ENFORCE_ACCESS_JWT below
+//      is the defence-in-depth check for that.
+// ---------------------------------------------------------------------------
+
+const SERANKING_MCP_URL = "https://api.seranking.com/mcp";
+const SERANKING_SERVER_LABEL = "se_ranking";
+
+// The ONLY tools either model can call. Names were taken verbatim from a live
+// `tools/list` against the server above — none are guessed. All are `get*`
+// research tools in the DATA_ namespace; none touches project/account data.
+//
+// Removing a tool is a one-line edit; adding one is not — confirm the exact
+// name against `tools/list` first, and confirm it only reads.
+const SERANKING_TOOLS = [
+  "DATA_getDomainOverviewByCountry", // domain overview, per country/database
+  "DATA_getDomainKeywords",          // organic keywords a domain ranks for
+  "DATA_getKeywordsMetrics",         // keyword research: volume, KD, CPC, intent
+  "DATA_getBacklinksSummary",        // backlink profile summary
+  "DATA_getAiSearchOverview",        // AI search visibility
+];
+
+// DELIBERATELY ABSENT: DATA_getSerpResults. It queues a SERP task server-side,
+// consumes SERP credits, and polls for up to five minutes — long enough to
+// stall a generation turn. Every tool above returns immediately from stored
+// data. Re-add it only if you accept that cost and latency.
+
+// Human-friendly labels for the tool chips the client renders. Falls back to
+// the raw name, so a tool added later still shows something sensible.
+const SERANKING_TOOL_LABELS = {
+  DATA_getDomainOverviewByCountry: "domain overview",
+  DATA_getDomainKeywords: "organic keywords",
+  DATA_getKeywordsMetrics: "keyword metrics",
+  DATA_getBacklinksSummary: "backlinks summary",
+  DATA_getAiSearchOverview: "AI search visibility",
+};
+
+// Defence in depth for the Cloudflare Access requirement. Access terminates in
+// front of this Worker and stamps every authenticated request with a JWT
+// header; a request without one never went through it. Set to false only for
+// local `wrangler pages dev`, where there is no Access in front.
+const ENFORCE_ACCESS_JWT = true;
+
+// Decide whether MCP should be attached to this request, and why not if not.
+// Returns { enabled, key?, proxyUrl?, proxySecret?, error? } — `error` is a
+// client-safe reason.
+//
+// The two providers need different things, so `provider` matters here:
+//   openai    — the SE Ranking key, sent directly as X-Api-Key
+//   anthropic — our proxy's URL and secret (the SE Ranking key stays here)
+function resolveMcp({ useMcp, env, request, provider }) {
+  if (useMcp !== true) return { enabled: false };
+
+  const key = env && env.SERANKING_API_KEY;
+  if (!key) {
+    // Deliberately explicit: this is an operator misconfiguration, not a user
+    // error, and silently answering without data would be worse.
+    return {
+      enabled: false,
+      error:
+        "SE Ranking data is switched on, but this deployment has no " +
+        "SERANKING_API_KEY configured. Turn the toggle off, or ask an admin " +
+        "to add the key.",
+    };
+  }
+
+  // Cloudflare Access puts this header on every request it lets through.
+  // localhost has no Access in front of it, so it is exempt.
+  if (ENFORCE_ACCESS_JWT && !isLocalRequest(request)) {
+    const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
+    if (!jwt) {
+      return {
+        enabled: false,
+        error:
+          "SE Ranking data is only available to signed-in SE Ranking staff. " +
+          "This request didn't come through Cloudflare Access.",
+      };
+    }
+  }
+
+  // Anthropic can only reach SE Ranking through our proxy, which needs both a
+  // shared secret and a publicly reachable URL.
+  if (provider === "anthropic") {
+    const proxySecret = env && env.MCP_PROXY_SECRET;
+    if (!proxySecret) {
+      return {
+        enabled: false,
+        error:
+          "SE Ranking data for Claude needs MCP_PROXY_SECRET configured on this " +
+          "deployment. ChatGPT turns are unaffected — switch the primary model, " +
+          "or ask an admin to add the secret.",
+      };
+    }
+
+    const proxyUrl = proxyUrlFor(env, request);
+    if (!proxyUrl) {
+      return {
+        enabled: false,
+        error: "Couldn't work out this deployment's proxy URL for SE Ranking data.",
+      };
+    }
+
+    // Anthropic calls the proxy from its own cloud, so a localhost URL can
+    // never work. Fail with an explanation rather than a confusing timeout.
+    if (isLocalUrl(proxyUrl)) {
+      return {
+        enabled: false,
+        error:
+          "Claude can't reach SE Ranking from a local dev server — Anthropic " +
+          "calls our proxy from its own cloud, which can't see localhost. Use a " +
+          "deployed URL, or switch the primary model to ChatGPT (which grounds " +
+          "anywhere).",
+      };
+    }
+
+    return { enabled: true, key, proxyUrl, proxySecret };
+  }
+
+  return { enabled: true, key };
+}
+
+// True for a URL Anthropic's cloud could never dial back to.
+function isLocalUrl(value) {
+  try {
+    const host = new URL(value).hostname;
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]" ||
+      host === "::1" ||
+      host.endsWith(".local")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isLocalRequest(request) {
+  try {
+    const host = new URL(request.url).hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+// --- Provider-specific request fragments -----------------------------------
+// Each returns the object to merge into that provider's payload. Both are
+// called ONLY when mcp.enabled is true, so a disabled toggle produces a
+// byte-for-byte unchanged request.
+
+// OpenAI /v1/responses: MCP is a tool entry.
+//
+// AUTH: SE Ranking's MCP server does NOT accept a static API key as a bearer
+// token — `Authorization: Bearer <key>` fails the MCP `initialize` handshake
+// with 401 and a pointer to its OAuth flow. The same key DOES authenticate the
+// whole session when sent as `X-Api-Key`, so that is what we send. OpenAI's
+// MCP tool supports arbitrary `headers`, which makes this possible.
+// (Verified against the live server: initialize/tools/list/tools/call all 200.)
+function openAiMcpTool(key) {
+  return {
+    type: "mcp",
+    server_label: SERANKING_SERVER_LABEL,
+    server_url: SERANKING_MCP_URL,
+    headers: { "X-Api-Key": key },
+    require_approval: "never",
+    allowed_tools: SERANKING_TOOLS,
+  };
+}
+
+// Anthropic reaches SE Ranking through our own proxy, not directly.
+//
+// The constraint that forces this:
+//   * Anthropic's `mcp_servers` entry only offers `authorization_token`, which
+//     it sends as `Authorization: Bearer <token>`. A `headers` field is
+//     rejected outright ("mcp_servers.0.headers: Extra inputs are not
+//     permitted").
+//   * SE Ranking's MCP server rejects a static API key presented as a bearer
+//     token during `initialize` (401, pointing at an OAuth flow). It accepts
+//     that key only via `X-Api-Key`.
+//   * Its OAuth server advertises grant_types ["authorization_code",
+//     "refresh_token"] — no client_credentials — so a token cannot be minted
+//     non-interactively either.
+//
+// So Claude is pointed at functions/api/mcp/seranking.js, which authenticates
+// us with MCP_PROXY_SECRET and swaps that Bearer for the X-Api-Key the server
+// wants. OpenAI is unaffected and still calls SE Ranking directly.
+//
+// NOTE: Anthropic connects from its own cloud, so the proxy URL must be
+// publicly reachable. Claude grounding therefore only works on a DEPLOYED
+// URL — never against localhost. OpenAI grounding works anywhere.
+const ANTHROPIC_MCP_SUPPORTED = true;
+
+// Where Anthropic should send its MCP traffic. An explicit env var wins;
+// falling back to this request's own origin keeps preview deployments working
+// with no extra configuration.
+function proxyUrlFor(env, request) {
+  const configured = env && env.MCP_PROXY_URL;
+  if (typeof configured === "string" && configured.trim()) return configured.trim();
+  try {
+    return new URL(request.url).origin + "/api/mcp/seranking";
+  } catch {
+    return null;
+  }
+}
+
+// Anthropic /v1/messages: an mcp_servers entry PLUS a matching mcp_toolset.
+// The API requires that every server in mcp_servers is referenced by exactly
+// one toolset, so these two always travel together — or not at all.
+//
+// default_config.enabled = false is the important half: it denies everything
+// the server offers, and `configs` then re-enables only the whitelist. A tool
+// that isn't listed cannot be called even if the server advertises it.
+// The url is OUR proxy and the token is OUR proxy secret — the SE Ranking key
+// itself never leaves the Worker on this path.
+function anthropicMcpFields({ url, token }) {
+  const configs = {};
+  SERANKING_TOOLS.forEach((name) => {
+    configs[name] = { enabled: true };
+  });
+
+  return {
+    mcp_servers: [
+      {
+        type: "url",
+        url,
+        name: SERANKING_SERVER_LABEL,
+        authorization_token: token,
+      },
+    ],
+    tools: [
+      {
+        type: "mcp_toolset",
+        mcp_server_name: SERANKING_SERVER_LABEL,
+        default_config: { enabled: false },  // deny by default
+        configs,                             // ...then allow only these
+      },
+    ],
+  };
+}
+
+// The beta header Anthropic requires for MCP connector requests.
+const ANTHROPIC_MCP_BETA = "mcp-client-2025-11-20";
+
+// Label used on the tool chip the client renders.
+function toolLabel(name) {
+  return SERANKING_TOOL_LABELS[name] || name || "tool";
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +700,12 @@ function mergeRawUsage(target, incoming) {
 //   { type: "done",  truncated: bool }  finished (truncated = hit the cap)
 //   { type: "error", message: "..." }   friendly message only, never raw
 //   { type: "usage", partial: true }    EARLY, best-effort usage + model id
+//   { type: "tool",  server, name }     an MCP tool call just started
+//
+// The "tool" event is informational only. Tool ARGUMENTS and tool RESULTS are
+// never forwarded: they are provider-internal traffic, often large, and would
+// corrupt the assistant text if concatenated into it. Only the fact that a
+// named tool fired is surfaced, so the UI can show a chip.
 //
 // The "usage" event exists because of Stop: an aborted stream never receives
 // the terminal event, so the client would otherwise have no model ID and no
@@ -419,7 +718,7 @@ function mergeRawUsage(target, incoming) {
 // event. Provider error bodies and API keys never cross this boundary — they
 // are logged server-side only.
 // ---------------------------------------------------------------------------
-async function handleStreamRequest(context, { provider, apiKey, system, messages }) {
+async function handleStreamRequest(context, { provider, apiKey, system, messages, mcp }) {
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
@@ -433,9 +732,9 @@ async function handleStreamRequest(context, { provider, apiKey, system, messages
   const pump = (async () => {
     try {
       if (provider === "anthropic") {
-        await streamAnthropic({ apiKey, system, messages, send });
+        await streamAnthropic({ apiKey, system, messages, send, mcp });
       } else {
-        await streamOpenAI({ apiKey, system, messages, send });
+        await streamOpenAI({ apiKey, system, messages, send, mcp });
       }
     } catch (err) {
       // Same rule as the non-streaming path: log everything, return nothing
@@ -485,7 +784,7 @@ async function handleStreamRequest(context, { provider, apiKey, system, messages
 // truncation detection lives (same "max_tokens" value as the non-streaming
 // response).
 // ---------------------------------------------------------------------------
-async function streamAnthropic({ apiKey, system, messages, send }) {
+async function streamAnthropic({ apiKey, system, messages, send, mcp }) {
   const payload = {
     model: CONFIG.anthropic.model,
     max_tokens: CONFIG.anthropic.maxTokens,
@@ -494,13 +793,25 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
   };
   if (system) payload.system = system;
 
+  const headers = {
+    "content-type": "application/json",
+    "x-api-key": apiKey,
+    "anthropic-version": CONFIG.anthropic.version,
+  };
+
+  // Server + toolset together, or neither. See anthropicMcpFields() and
+  // ANTHROPIC_MCP_SUPPORTED.
+  if (mcp && mcp.enabled && ANTHROPIC_MCP_SUPPORTED && mcp.proxyUrl) {
+    Object.assign(
+      payload,
+      anthropicMcpFields({ url: mcp.proxyUrl, token: mcp.proxySecret })
+    );
+    headers["anthropic-beta"] = ANTHROPIC_MCP_BETA;
+  }
+
   const res = await fetch(CONFIG.anthropic.apiUrl, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": CONFIG.anthropic.version,
-    },
+    headers,
     body: JSON.stringify(payload),
   });
 
@@ -513,6 +824,13 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
   // counts, message_delta / message_stop carry the final output count. Merge
   // whatever turns up and normalize once at the end.
   let rawUsage = null;
+
+  // Which content block indexes are MCP tool traffic rather than reply text.
+  // Anthropic interleaves mcp_tool_use / mcp_tool_result blocks with the text
+  // blocks in the SAME stream, addressed by `index`. Deltas for those indexes
+  // (input_json_delta, and any text inside a result) must never be forwarded
+  // as assistant output.
+  const toolBlocks = new Set();
 
   // Tell the client which model is answering before any text arrives, so a
   // Stop can still be priced. See the "usage" event note above.
@@ -528,6 +846,10 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
 
     switch (type) {
       case "content_block_delta": {
+        // Belongs to an MCP tool block: not assistant text, drop it.
+        // (input_json_delta carries the tool's arguments.)
+        if (typeof d.index === "number" && toolBlocks.has(d.index)) return;
+
         const delta = d.delta || {};
         // Only text_delta is forwarded. Any other delta kind (thinking, tool
         // input) must never leak into the chat.
@@ -575,9 +897,31 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
         });
         return;
 
-      // Known, uninteresting.
-      case "content_block_start":
+      case "content_block_start": {
+        const block = d.content_block || {};
+        // MCP traffic: remember the index so its deltas are skipped, and
+        // announce the call so the UI can show a chip. The tool NAME lives on
+        // the mcp_tool_use block; arguments stream in afterwards and are
+        // deliberately dropped.
+        if (block.type === "mcp_tool_use" || block.type === "mcp_tool_result") {
+          if (typeof d.index === "number") toolBlocks.add(d.index);
+          if (block.type === "mcp_tool_use") {
+            await send({
+              type: "tool",
+              server: block.server_name || SERANKING_SERVER_LABEL,
+              name: toolLabel(block.name),
+            });
+          }
+        }
+        return;
+      }
+
       case "content_block_stop":
+        // The block is finished; stop tracking it either way.
+        if (typeof d.index === "number") toolBlocks.delete(d.index);
+        return;
+
+      // Known, uninteresting.
       case "ping":
         return;
 
@@ -604,7 +948,7 @@ async function streamAnthropic({ apiKey, system, messages, send }) {
 // throwing. Nothing here assumes a fixed event order — the reply is whatever
 // text arrived by the time the body ends.
 // ---------------------------------------------------------------------------
-async function streamOpenAI({ apiKey, system, messages, send }) {
+async function streamOpenAI({ apiKey, system, messages, send, mcp }) {
   const payload = {
     model: CONFIG.openai.model,
     input: messages,
@@ -615,6 +959,7 @@ async function streamOpenAI({ apiKey, system, messages, send }) {
   if (CONFIG.openai.reasoningEffort) {
     payload.reasoning = { effort: CONFIG.openai.reasoningEffort };
   }
+  if (mcp && mcp.enabled) payload.tools = [openAiMcpTool(mcp.key)];
 
   const res = await fetch(CONFIG.openai.apiUrl, {
     method: "POST",
@@ -632,6 +977,14 @@ async function streamOpenAI({ apiKey, system, messages, send }) {
   // The final usage object rides on response.completed (and on
   // response.incomplete when the reply was cut off).
   let rawUsage = null;
+
+  // item_id -> tool name. The "call in progress" event doesn't carry the tool
+  // name, only the item id, so the name is captured from the item's `added`
+  // event and looked up when the call actually fires.
+  const mcpCallNames = new Map();
+  // Item ids that are MCP traffic rather than a message, so their argument
+  // deltas can be recognised and dropped.
+  const mcpItems = new Set();
 
   // The Responses API doesn't report usage until it finishes, so this early
   // event carries the model ID only — enough for the client to price its own
@@ -653,6 +1006,58 @@ async function streamOpenAI({ apiKey, system, messages, send }) {
       if (chunk) await send({ type: "delta", text: chunk });
       return;
     }
+
+    // 1b) MCP items. `response.output_item.added` is where an mcp_call first
+    //     appears, and the only place the tool name is reliably present, so
+    //     it is stashed against the item id. Nothing here is ever forwarded
+    //     as text: arguments and results stay provider-internal.
+    if (type === "response.output_item.added" && d.item && typeof d.item === "object") {
+      const item = d.item;
+      if (item.type === "mcp_call" || item.type === "mcp_list_tools") {
+        if (item.id) {
+          mcpItems.add(item.id);
+          if (item.name) mcpCallNames.set(item.id, item.name);
+        }
+        // Announce as soon as the call appears — this is the earliest point
+        // at which we know both that a call is happening and what it is.
+        if (item.type === "mcp_call") {
+          await send({
+            type: "tool",
+            server: item.server_label || SERANKING_SERVER_LABEL,
+            name: toolLabel(item.name),
+          });
+        }
+      }
+      return;
+    }
+
+    // A call moving to "in progress" may be the first event that names it in
+    // some API versions, and may name nothing at all in others — hence the
+    // id -> name map. Only announce if `added` didn't already.
+    if (/^response\.mcp_call/.test(type)) {
+      const id = d.item_id || d.id;
+      if (type.endsWith(".in_progress") && id && !mcpCallNames.has(id)) {
+        mcpCallNames.set(id, null);
+        await send({
+          type: "tool",
+          server: SERANKING_SERVER_LABEL,
+          name: toolLabel(d.name || null),
+        });
+      }
+      // Failures are logged, then reported as a friendly line. The turn
+      // continues: the model can still answer without the tool.
+      if (type.endsWith(".failed")) {
+        console.log(`[OpenAI stream] MCP call failed — ${snippet(d)}`);
+        await send({
+          type: "error",
+          message: "An SE Ranking lookup failed, so the answer may be missing that data.",
+        });
+      }
+      return;                       // arguments/results are never forwarded
+    }
+
+    // Argument deltas for an MCP item: explicitly dropped.
+    if (mcpItems.has(d.item_id) && /\.delta$/.test(type)) return;
 
     // 2) Terminal events. Advisory only — we finish when the body ends.
     if (type === "response.completed" || type === "response.incomplete") {
@@ -685,7 +1090,13 @@ async function streamOpenAI({ apiKey, system, messages, send }) {
     }
 
     // 4) Known bookkeeping events we intentionally ignore.
-    if (OPENAI_IGNORED_EVENTS.has(type) || /^response\.(reasoning|refusal)/.test(type)) {
+    if (
+      OPENAI_IGNORED_EVENTS.has(type) ||
+      /^response\.(reasoning|refusal)/.test(type) ||
+      // MCP bookkeeping: tool listings and argument streaming. Recognised so
+      // they don't spam the unknown-event log; never forwarded.
+      /^response\.mcp_list_tools/.test(type)
+    ) {
       return;
     }
 
@@ -705,6 +1116,10 @@ async function streamOpenAI({ apiKey, system, messages, send }) {
 // Returns the text chunk for an output-text delta event, or null if this
 // event isn't one. Tolerates the chunk living in `delta` or `text`.
 function openAiTextDelta(type, d) {
+  // MCP argument deltas (response.mcp_call.arguments.delta) must never be
+  // mistaken for reply text — hence the explicit exclusion as well as the
+  // "output_text" requirement.
+  if (/^response\.mcp/.test(type)) return null;
   const isTextDelta =
     type === "response.output_text.delta" ||
     (/output_text/.test(type) && /\.delta$/.test(type));
