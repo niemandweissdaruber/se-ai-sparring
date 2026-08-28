@@ -12,8 +12,6 @@ Anthropic and/or OpenAI key in Settings; the key is stored in that person's brow
 sent with their own requests. Whoever deploys this never pays for anyone else's usage.
 One key is enough to chat — second opinions need both.
 
-Claude uses a warm amber accent, ChatGPT a green one. No real company logos — just circular lettermark badges (`C` / `G`).
-
 ---
 
 ## How it's built
