@@ -86,6 +86,15 @@ export async function onRequestPost(context) {
   const { provider, mode, messages, question, targetText, stream, useMcp } =
     body || {};
 
+  // Optional per-request output cap, used by small utility calls such as chat
+  // title generation. Clamped: it can only ever LOWER the configured ceiling,
+  // never raise it, so a caller cannot enlarge the bill.
+  const requestedMax = Number(body && body.maxTokens);
+  const maxTokensOverride =
+    isFinite(requestedMax) && requestedMax > 0
+      ? Math.min(Math.round(requestedMax), CONFIG[provider === "anthropic" ? "anthropic" : "openai"][provider === "anthropic" ? "maxTokens" : "maxOutputTokens"])
+      : null;
+
   // Validate provider.
   if (provider !== "anthropic" && provider !== "openai") {
     return json({ error: "bad_request", message: "Unknown provider." }, 400);
@@ -144,9 +153,9 @@ export async function onRequestPost(context) {
     // notice and offers a "Continue" button.
     let result;
     if (provider === "anthropic") {
-      result = await callAnthropic({ apiKey, system, messages: builtMessages, mcp });
+      result = await callAnthropic({ apiKey, system, messages: builtMessages, mcp, maxTokensOverride });
     } else {
-      result = await callOpenAI({ apiKey, system, messages: builtMessages, mcp });
+      result = await callOpenAI({ apiKey, system, messages: builtMessages, mcp, maxTokensOverride });
     }
     // `usage` is the normalized token count (or null when the provider didn't
     // give us a usable one) and `model` is the exact model ID that served the
@@ -221,10 +230,10 @@ function buildMessages({ mode, messages, question, targetText }) {
 // ---------------------------------------------------------------------------
 // Anthropic REST call — POST /v1/messages
 // ---------------------------------------------------------------------------
-async function callAnthropic({ apiKey, system, messages, mcp }) {
+async function callAnthropic({ apiKey, system, messages, mcp, maxTokensOverride }) {
   const payload = {
     model: CONFIG.anthropic.model,
-    max_tokens: CONFIG.anthropic.maxTokens,
+    max_tokens: maxTokensOverride || CONFIG.anthropic.maxTokens,
     messages, // [{ role: "user" | "assistant", content: "..." }]
   };
   // Anthropic takes the system prompt as a top-level field, not a message.
@@ -285,11 +294,11 @@ async function callAnthropic({ apiKey, system, messages, mcp }) {
 //   - the token cap is `max_output_tokens`, not `max_tokens`
 //   - reasoning effort is set via `reasoning: { effort }`
 // ---------------------------------------------------------------------------
-async function callOpenAI({ apiKey, system, messages, mcp }) {
+async function callOpenAI({ apiKey, system, messages, mcp, maxTokensOverride }) {
   const payload = {
     model: CONFIG.openai.model,
     input: messages, // [{ role: "user" | "assistant", content: "..." }]
-    max_output_tokens: CONFIG.openai.maxOutputTokens,
+    max_output_tokens: maxTokensOverride || CONFIG.openai.maxOutputTokens,
   };
   if (system) payload.instructions = system;
   if (CONFIG.openai.reasoningEffort) {

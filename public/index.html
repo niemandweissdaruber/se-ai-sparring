@@ -61,9 +61,22 @@
       --panel-w: 400px;           /* fixed width of the right column */
       --bubble-w: 680px;          /* readable measure for message text */
 
-      /* These two flip when the primary model is swapped (set via JS). */
+      /* Solid fills for the primary-model ACTION buttons (composer Send,
+         panel Send back). Kept separate from the accent above: the accent is
+         a tint used on borders, glows and bubbles, whereas these need enough
+         weight to carry dark button text. Claude uses its brand clay rather
+         than the amber tint; ChatGPT reuses its accent green. */
+      --claude-action: #D97757;
+      --claude-action-hover: #C56646;
+      --chatgpt-action: #24b47e;
+      --chatgpt-action-hover: #1c9468;
+
+      /* These flip together when the primary model is swapped (set via JS in
+         applyRoleStyling, the single source of truth for role colours). */
       --primary-accent: var(--claude);
       --critic-accent: var(--chatgpt);
+      --primary-action: var(--claude-action);
+      --primary-action-hover: var(--claude-action-hover);
     }
 
     * { box-sizing: border-box; }
@@ -119,14 +132,23 @@
       letter-spacing: -0.02em;
       min-width: 0;
     }
+    /* Live phase indicator. Hidden while idle; shown only for the duration
+       of a turn, so it always means something. Keeps the old pill styling. */
     .brand .vs {
-      color: var(--text-faint);
+      color: var(--text-dim);
       font-weight: 600;
-      font-size: 15px;
-      padding: 2px 8px;
+      font-size: 13px;
+      padding: 2px 10px;
       border: 1px solid var(--border);
       border-radius: 999px;
       white-space: nowrap;
+      animation: phase-pulse 1.6s ease-in-out infinite;
+    }
+    .brand .vs[hidden] { display: none; }
+
+    @keyframes phase-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.55; }
     }
 
     /* Primary-model toggle */
@@ -583,14 +605,16 @@
       font: inherit;
       font-weight: 700;
       font-size: 15px;
+      /* Dark text on both fills: measured ~6.0:1 on the clay and ~7.0:1 on
+         the green, where white would only reach ~3.1:1 on the clay. */
       color: #0e0f13;
-      background: var(--primary-accent);
+      background: var(--primary-action);
       border: none;
       border-radius: var(--radius);
       cursor: pointer;
-      transition: filter 0.2s ease, transform 0.1s ease;
+      transition: background 0.2s ease, transform 0.1s ease;
     }
-    button.send:hover { filter: brightness(1.08); }
+    button.send:hover { background: var(--primary-action-hover); }
     button.send:active { transform: translateY(1px); }
     button.send:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -1332,11 +1356,19 @@
     }
     .mcp-toggle:hover { color: var(--text-dim); border-color: var(--border); }
 
-    .mcp-dot {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: var(--text-faint);
+    /* SE Ranking mark, inlined as a data URI so there is no external asset
+       to fetch or 404. Dimmed when the toggle is off, full strength (with a
+       faint glow, matching the other primary toggles) when it is on. */
+    .mcp-mark {
+      width: 17px;
+      height: 17px;
       flex: none;
-      transition: all 0.18s ease;
+      display: block;
+      object-fit: contain;
+      opacity: 0.5;
+      transition: opacity 0.18s ease, filter 0.18s ease;
+      pointer-events: none;
+      user-select: none;
     }
     /* On: a clear, live-looking state — this costs money when it fires. */
     .mcp-toggle.on {
@@ -1344,9 +1376,9 @@
       border-color: #4c8dff;
       background: rgba(76, 141, 255, 0.12);
     }
-    .mcp-toggle.on .mcp-dot {
-      background: #4c8dff;
-      box-shadow: 0 0 7px 1px rgba(76, 141, 255, 0.7);
+    .mcp-toggle.on .mcp-mark {
+      opacity: 1;
+      filter: drop-shadow(0 0 5px rgba(76, 141, 255, 0.55));
     }
 
     /* Tool-call chips, above the reply text. Muted metadata, same weight as
@@ -1556,14 +1588,16 @@
       font-weight: 700;
       font-size: 14px;
       color: #0e0f13;
-      background: var(--primary-accent);
+      /* Same primary-model fill as the composer Send, so the two never
+         disagree about which model is currently answering. */
+      background: var(--primary-action);
       border: none;
       padding: 13px;
       border-radius: var(--radius-sm);
       cursor: pointer;
-      transition: filter 0.2s ease;
+      transition: background 0.2s ease;
     }
-    button.send-back:hover { filter: brightness(1.08); }
+    button.send-back:hover { background: var(--primary-action-hover); }
     button.send-back:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* ---- Floating "Critique selection" button ------------------------ */
@@ -1731,7 +1765,8 @@
           </svg>
         </button>
         <span>SE AI Sparring</span>
-        <span class="vs">answer &middot; critique</span>
+        <!-- Live phase indicator: text and visibility come from setPhase(). -->
+        <span class="vs" id="phase" hidden></span>
       </div>
 
       <div class="header-right">
@@ -1756,7 +1791,7 @@
              the credential is server-side only. -->
         <button class="mcp-toggle" id="mcp-toggle" onclick="toggleMcp()"
                 aria-pressed="false" aria-label="Toggle SE Ranking data">
-          <span class="mcp-dot"></span>
+          <img class="mcp-mark" src="data:image/png;base64,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" alt="" aria-hidden="true" />
           <span class="mcp-label">SE Ranking data</span>
         </button>
 
@@ -2199,6 +2234,10 @@
     const root = document.documentElement.style;
     root.setProperty("--primary-accent", `var(--${primary})`);
     root.setProperty("--critic-accent", `var(--${critic})`);
+    // Button fills flip in the same place as the accent and the placeholder,
+    // so Send, "Send back" and the toggle can never disagree about the role.
+    root.setProperty("--primary-action", `var(--${primary}-action)`);
+    root.setProperty("--primary-action-hover", `var(--${primary}-action-hover)`);
 
     // Toggle active state + glow.
     document.querySelectorAll("#toggle button").forEach((b) => {
@@ -2603,13 +2642,16 @@
   // --- Networking ----------------------------------------------------
   // One helper for all three modes. Returns { text } or throws/handles error.
   // The user's own key rides in the x-provider-key header (see providerHeaders).
-  async function callApi(payload) {
+  // opts.noMcp — skip the SE Ranking toggle for this one call. Used by the
+  // chat-title helper, which is a tiny utility request, not a generation turn:
+  // grounding it would be slow, expensive and pointless.
+  async function callApi(payload, opts = {}) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: providerHeaders(payload.provider),
       // withMcp() is applied here (and in openStream) so EVERY generation
       // turn picks up the toggle without each call site remembering to.
-      body: JSON.stringify(withMcp(payload)),
+      body: JSON.stringify(opts.noMcp ? payload : withMcp(payload)),
     });
     return res.json();
   }
@@ -2667,7 +2709,8 @@
     scrollDownForce();
 
     const out = await streamText(rec, rec.el.querySelector(".bubble"),
-                                 payload, "chat", () => chatScroller.tick());
+                                 payload, "chat", () => chatScroller.tick(),
+                                 opts.rebuttal ? "rebuttal" : "answer");
     rec.streaming = false;
 
     // --- Nothing streamed: fall back to the original blocking request ---
@@ -2677,9 +2720,12 @@
       // if so it's already the complete reply and needs no second request.
       let data = out.json;
       if (!data) {
+        // The stream never opened, so beginStream never set the phase.
+        setPhase(opts.rebuttal ? "rebuttal" : "answer");
         const typing = showTyping(model);
         data = await callApi(payload).catch(() => ({ error: "network" }));
         typing.remove();
+        clearPhase();
       }
       if (data.error) {
         handleError(data, model);
@@ -2700,6 +2746,7 @@
       recordSpend(MODELS[model].provider, data.model, fallbackUsage);
       setBusy(false);
       saveCurrent();
+      maybeTitleConversation(kind);
       return;
     }
 
@@ -2731,6 +2778,20 @@
     refreshMessage(rec);          // final full render + copy buttons + notes
     setBusy(false);
     saveCurrent();                // save once, complete — not per chunk
+    maybeTitleConversation(kind);
+  }
+
+  // Name the chat after its first completed primary answer — never on a
+  // critique, a rebuttal, or any later turn. Fire-and-forget on purpose: the
+  // turn is already finished, and a title failure must not surface as one.
+  function maybeTitleConversation(kind) {
+    if (kind !== "plain") return;
+    if (messages.filter((m) => m.role === "assistant").length !== 1) return;
+    const id = currentId;
+    if (!id) return;
+    Promise.resolve()
+      .then(() => generateChatTitle(id))
+      .catch((err) => console.warn("Chat title generation failed.", err));
   }
 
   // =====================================================================
@@ -2784,7 +2845,8 @@
     rec.stopped = false;
     refreshMessage(rec);
     const out = await streamText(rec, rec.el.querySelector(".bubble"),
-                                 payload, "chat", () => chatScroller.tick());
+                                 payload, "chat", () => chatScroller.tick(),
+                                 "continuing");
     rec.streaming = false;
 
     // A continuation is a second billed call. Its tokens are added to this
@@ -2903,15 +2965,17 @@
     };
 
     const out = await streamText(lastCritique, card, payload, "panel",
-                                 () => panelScroller.tick());
+                                 () => panelScroller.tick(), "critique");
 
     // --- Nothing streamed: fall back to the blocking request -----------
     if (!out.started) {
       let data = out.json;
       if (!data) {
+        setPhase("critique");        // the stream never opened
         card.innerHTML =
           '<div class="typing"><span></span><span></span><span></span></div>';
         data = await callApi(payload).catch(() => ({ error: "network" }));
+        clearPhase();
       }
       if (data.error) {
         // Show the friendly error inside the panel.
@@ -3016,7 +3080,7 @@
 
       // Streams into the same card; lastCritique.text grows as it arrives.
       const out = await streamText(lastCritique, card, payload, "panel",
-                                   () => panelScroller.tick());
+                                   () => panelScroller.tick(), "continuing");
 
       if (!out.started) {
         let data = out.json;
@@ -4349,6 +4413,42 @@
   // The stream in flight, if any: { controller, source: "chat" | "panel" }.
   let activeStream = null;
 
+  // --- Live phase indicator --------------------------------------------
+  // The header pill is hidden while idle and names the current phase while a
+  // turn runs, so it always describes something real. Driven from
+  // beginStream/endStream, which bracket every streamed turn, plus the
+  // non-streaming fallback paths.
+  const PHASE_LABELS = {
+    answer: "Answering…",
+    critique: "Second opinion…",
+    rebuttal: "Rebuttal…",
+    continuing: "Continuing…",
+    titling: null,          // title generation is silent: no phase shown
+  };
+
+  let currentPhase = null;
+
+  function setPhase(phase) {
+    currentPhase = phase;
+    renderPhase();
+  }
+  function clearPhase() {
+    currentPhase = null;
+    renderPhase();
+  }
+  function renderPhase() {
+    const el = $("phase");
+    if (!el) return;
+    const label = currentPhase ? PHASE_LABELS[currentPhase] : null;
+    if (!label) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.textContent = label;
+    el.hidden = false;
+  }
+
   // --- Reading the normalized SSE stream -----------------------------
   // Returns { started, aborted, json, failed }:
   //   started — at least one normalized event arrived, so the caller should
@@ -4539,13 +4639,15 @@
   // --- Stop button ----------------------------------------------------
   // While a stream runs, Send becomes Stop (and, for a critique, so does the
   // panel's button). Aborting keeps whatever text already arrived.
-  function beginStream(controller, source) {
+  function beginStream(controller, source, phase) {
     activeStream = { controller, source };
+    if (phase) setPhase(phase);
     applySendButton();
     applyPanelButton();
   }
   function endStream() {
     activeStream = null;
+    clearPhase();
     applySendButton();
     applyPanelButton();
   }
@@ -4594,7 +4696,9 @@
   // `store` is any object with a mutable `.text` string (a message record, or
   // lastCritique); `el` is the element the markdown is painted into.
   // Returns { started, aborted, json, failed, truncated, errorMessage }.
-  async function streamText(store, el, payload, source, onPaint) {
+  // `phase` names what this stream is for, so the header indicator can say
+  // "Answering…" / "Second opinion…" / "Rebuttal…" while it runs.
+  async function streamText(store, el, payload, source, onPaint, phase) {
     const controller = new AbortController();
     const painter = makePainter(el, () => store.text, onPaint);
     painter.schedule();                        // empty bubble + caret, at once
@@ -4610,7 +4714,7 @@
     // For a fresh reply baseText is empty, so this is a no-op.
     let firstChunk = true;
 
-    beginStream(controller, source);
+    beginStream(controller, source, phase);
 
     const result = await openStream(payload, {
       signal: controller.signal,
@@ -4741,6 +4845,9 @@
       id: c.id,
       title: typeof c.title === "string" ? c.title : "",
       titleCustom: !!c.titleCustom,
+      // Set once a model has named the chat, so we never ask twice and never
+      // overwrite the result with the fallback.
+      titleGenerated: !!c.titleGenerated,
       createdAt: Number(c.createdAt) || Date.now(),
       updatedAt: Number(c.updatedAt) || Number(c.createdAt) || Date.now(),
       primary: c.primary,
@@ -4820,6 +4927,7 @@
         id: currentId,
         title: "",
         titleCustom: false,
+        titleGenerated: false,
         createdAt: now,
       };
       conversations.push(conv);
@@ -4828,7 +4936,9 @@
     conv.updatedAt = now;
     conv.primary = primary;                  // remembered per conversation
     conv.critic = critic;
-    if (!conv.titleCustom) conv.title = autoTitle();
+    // The placeholder only applies until something better exists: a manual
+    // rename (titleCustom) or a model-generated title (titleGenerated).
+    if (!conv.titleCustom && !conv.titleGenerated) conv.title = autoTitle();
 
     // Snapshot both views (plain objects only — no DOM nodes).
     // A reply still in flight is saved as an in-progress placeholder. On the
@@ -4896,6 +5006,90 @@
       receivedText: rec.text,
       payload: { messages: history },
     });
+  }
+
+  // =====================================================================
+  //  Chat titles
+  //
+  //  Until a model names the conversation, the sidebar shows a truncated
+  //  first message (autoTitle). After the FIRST primary answer completes we
+  //  ask the active primary model for a short title, once per conversation.
+  //
+  //  Deliberately: non-streaming, output-capped, no MCP, not shown as a chat
+  //  message, and NOT counted in the cost tracker — recordSpend is never
+  //  called for it. It also never blocks or breaks the turn: the caller
+  //  fires it and moves on, and any failure just leaves the placeholder.
+  // =====================================================================
+
+  const TITLE_MAX_WORDS = 6;
+  const TITLE_MAX_CHARS = 40;
+
+  // Trim a model's answer down to something that belongs in a sidebar row.
+  // Models like to add quotes, trailing full stops, or "Title:" prefixes.
+  function sanitizeTitle(raw) {
+    if (typeof raw !== "string") return "";
+    let t = raw
+      .replace(/\s+/g, " ")                    // collapse newlines/runs
+      .replace(/^\s*(?:title|chat title)\s*[:\-–]\s*/i, "")
+      // Surrounding quotes, backticks and markdown emphasis — models add all
+      // three even when told not to.
+      .replace(/^["'“”‘’`*_~]+|["'“”‘’`*_~]+$/g, "")
+      .replace(/[.!?,;:]+$/, "")                // trailing punctuation
+      .trim();
+
+    const words = t.split(" ").filter(Boolean);
+    if (words.length > TITLE_MAX_WORDS) t = words.slice(0, TITLE_MAX_WORDS).join(" ");
+    if (t.length > TITLE_MAX_CHARS) t = t.slice(0, TITLE_MAX_CHARS).trimEnd();
+    return t.replace(/[.!?,;:]+$/, "").trim();
+  }
+
+  // Ask the primary model to name this conversation. Fire-and-forget.
+  async function generateChatTitle(conversationId) {
+    const conv = conversations.find((c) => c.id === conversationId);
+    // Only once, and never over a name the user chose themselves.
+    if (!conv || conv.titleCustom || conv.titleGenerated) return;
+    if (!hasKey(primary)) return;
+
+    const firstUser = conv.messages.find((m) => m.role === "user");
+    if (!firstUser || !firstUser.text.trim()) return;
+    const firstAnswer = conv.messages.find((m) => m.role === "assistant");
+
+    // Keep the prompt cheap: the question, plus a short slice of the answer
+    // only as context for disambiguation.
+    const prompt =
+      "Give a short title for this conversation.\n\n" +
+      `Question: ${firstUser.text.slice(0, 500)}\n` +
+      (firstAnswer ? `Answer so far: ${firstAnswer.text.slice(0, 300)}\n` : "") +
+      "\nReply with ONLY the title: 3-5 words, no quotes, no trailing punctuation.";
+
+    let data;
+    try {
+      data = await callApi(
+        {
+          provider: MODELS[primary].provider,
+          mode: "chat",
+          messages: [{ role: "user", content: prompt }],
+          maxTokens: 16,          // server clamps this; it can only lower the cap
+        },
+        { noMcp: true }
+      );
+    } catch (err) {
+      console.warn("Chat title request failed; keeping the placeholder.", err);
+      return;
+    }
+
+    if (!data || data.error) return;            // placeholder stands
+    const title = sanitizeTitle(data.text);
+    if (!title) return;
+
+    // Re-read: the conversation may have been renamed or deleted meanwhile.
+    const fresh = conversations.find((c) => c.id === conversationId);
+    if (!fresh || fresh.titleCustom || fresh.titleGenerated) return;
+
+    fresh.title = title;
+    fresh.titleGenerated = true;
+    writeStore();
+    renderSidebar();
   }
 
   function newConversationId() {

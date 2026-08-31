@@ -31,3 +31,21 @@ variable and nothing else.
 ## Changing the filenames
 
 Paths live in one place: the `LOGO_SRC` constant in `index.html`.
+
+## SE Ranking mark
+
+`SE_Ranking_sign_blue_830e39b207.webp` in this folder is the source artwork for
+the SE Ranking icon on the "SE Ranking data" toggle. It is kept here for
+provenance only and is **not served** — the icon ships inlined as a base64 data
+URI in `public/index.html`, so there is no asset request and nothing to 404.
+
+Note the file is actually a PNG despite the `.webp` extension (that is how it
+was supplied). To regenerate the data URI after replacing it:
+
+```bash
+sips -Z 72 assets/SE_Ranking_sign_blue_830e39b207.webp --out /tmp/mark.png
+python3 -c "import base64;print('data:image/png;base64,'+base64.b64encode(open('/tmp/mark.png','rb').read()).decode())"
+```
+
+Downscaling first matters: the 520×568 original is 5.7 KB, which becomes ~7.6 KB
+of base64; at 72px it is ~2.1 KB, and it renders at 17px.
