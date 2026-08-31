@@ -18,6 +18,8 @@ SERANKING_API_KEY=your-read-only-se-ranking-key
 #   python3 -c "import secrets;print(secrets.token_urlsafe(32))"
 MCP_PROXY_SECRET=any-long-random-string
 
-# Production only: absolute URL of the deployed proxy. Omit locally — it falls
-# back to the request's own origin.
-# MCP_PROXY_URL=https://your-app.pages.dev/api/mcp/seranking
+# Optional: absolute URL of the deployed proxy. Usually leave this UNSET — it
+# falls back to the request's own origin, so it follows whatever host the
+# project deploys to. Replace the host below with your actual Pages host if you
+# do need to pin it.
+# MCP_PROXY_URL=https://se-ai-sparring.pages.dev/api/mcp/seranking

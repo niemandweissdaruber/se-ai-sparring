@@ -1,4 +1,4 @@
-# AI vs AI
+# SE AI Sparring
 
 A chat tool where one AI answers and a second AI critiques that answer — so you never have to trust a single model.
 
@@ -247,7 +247,7 @@ Three variables, all **encrypted** (Secret) in production:
 |---|---|---|
 | `SERANKING_API_KEY` | Both providers | Restricted, read-only SE Ranking key |
 | `MCP_PROXY_SECRET` | Claude only | Any random string; rotate freely |
-| `MCP_PROXY_URL` | Claude, production | Absolute URL of the deployed proxy, e.g. `https://your-app.pages.dev/api/mcp/seranking`. Omit and it falls back to the request's own origin, which is what makes preview deployments work unconfigured. |
+| `MCP_PROXY_URL` | Claude, optional | Absolute URL of the deployed proxy — e.g. `https://se-ai-sparring.pages.dev/api/mcp/seranking` (**replace with your actual Pages host**). Usually best left **unset**: it then falls back to the request's own origin, so the proxy follows whatever host the project deploys to and preview deployments work unconfigured. Set it only if the proxy must live on a different host from the app. |
 
 **Production** — Cloudflare dashboard → **Workers & Pages → your project → Settings
 → Environment variables**, then redeploy.

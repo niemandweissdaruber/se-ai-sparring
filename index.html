@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI vs AI</title>
+  <title>SE AI Sparring</title>
   <style>
     /* ===================================================================
-       AI vs AI — all styling inline, no build step.
+       SE AI Sparring — all styling inline, no build step.
        Per-model accents:  Claude = warm amber,  ChatGPT = green.
 
        Layout contract (do not break):
@@ -1730,7 +1730,7 @@
             <path d="M4 6h16M4 12h16M4 18h16"/>
           </svg>
         </button>
-        <span>AI vs AI</span>
+        <span>SE AI Sparring</span>
         <span class="vs">answer &middot; critique</span>
       </div>
 
@@ -1886,7 +1886,7 @@
 
       <div class="modal-body">
         <p class="modal-intro">
-          AI vs AI has no API keys of its own. Connect your own and the providers
+          SE AI Sparring has no API keys of its own. Connect your own and the providers
           bill you directly. <b>One key is enough to chat</b> — the second-opinion
           feature needs both.
         </p>
@@ -2006,7 +2006,7 @@
 
   <script>
   // =====================================================================
-  //  AI vs AI — front-end logic.  All state lives in memory (no storage).
+  //  SE AI Sparring — front-end logic.  All state lives in memory (no storage).
   // =====================================================================
 
   // Model metadata, keyed by our internal ids.
@@ -3210,7 +3210,7 @@
   //  so "remove my keys" and "clear my chats" stay independent operations.
   // =====================================================================
 
-  const KEYS_STORE_KEY = "aivsai.keys";
+  const KEYS_STORE_KEY = "seaisparring.keys";
   const KEYS_SCHEMA_VERSION = 1;
 
   // provider id -> the key the user pasted. Empty string means "not connected".
@@ -3711,7 +3711,7 @@
 
   // Its own storage key, deliberately separate from the conversation store:
   // this is a UI preference, not conversation content.
-  const MCP_STORE_KEY = "aivsai.seranking";
+  const MCP_STORE_KEY = "seaisparring.seranking";
   let mcpEnabled = false;
 
   function loadMcpPreference() {
@@ -4037,7 +4037,7 @@
   // All-time totals, in their own localStorage entry so "reset totals" and
   // "clear history" stay independent. NEVER contains keys — token counts and
   // computed costs only.
-  const SPEND_STORE_KEY = "aivsai.spend";
+  const SPEND_STORE_KEY = "seaisparring.spend";
   const SPEND_SCHEMA_VERSION = 1;
   let allTimeSpend = newSpendBucket();
 
@@ -4690,7 +4690,7 @@
   //  that is deliberately never rendered.
   // =====================================================================
 
-  const STORE_KEY = "aivsai.history";
+  const STORE_KEY = "seaisparring.history";
   const SCHEMA_VERSION = 1;
 
   // localStorage is ~5MB, counted in UTF-16 code units in most browsers, so

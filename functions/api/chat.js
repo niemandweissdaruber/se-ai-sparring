@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// AI vs AI — Pages Function
+// SE AI Sparring — Pages Function
 // Single POST endpoint: /api/chat
 //
 // BRING YOUR OWN KEY.
