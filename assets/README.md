@@ -1,11 +1,12 @@
 # Logo assets
 
-Drop the two provider logo files in here:
+Drop the two provider logo files in `public/assets/` (this file is
+documentation and is deliberately not served):
 
 | File | Shown for | Alt text |
 |------|-----------|----------|
-| `claude.webp` | Claude / Anthropic | `Claude` |
-| `openai.png` | ChatGPT / OpenAI | `ChatGPT` |
+| `public/assets/claude.webp` | Claude / Anthropic | `Claude` |
+| `public/assets/openai.png` | ChatGPT / OpenAI | `ChatGPT` |
 
 They are rendered inside the circular badge at ~66% of its size, unmodified —
 no recolouring, rotation, or filters. Square (1:1) artwork sits best.

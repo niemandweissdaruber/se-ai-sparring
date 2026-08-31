@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# SE AI Sparring — Cloudflare Worker (static assets + two API routes)
+#
+# Cloudflare now creates Workers rather than Pages projects, and Workers do NOT
+# use the Pages `functions/` file-based routing convention. So the handlers in
+# functions/ are wired up explicitly by worker/index.js, which routes the two
+# API paths and hands everything else to the static-asset binding.
+#
+# The handler files stay exactly where they are and keep their Pages-style
+# signatures, so this repo still deploys as a Pages project unchanged if that
+# is ever preferable (`wrangler pages deploy .`).
+# ---------------------------------------------------------------------------
+name = "se-ai-sparring"
+main = "worker/index.js"
+compatibility_date = "2026-08-01"
+
+[assets]
+# A dedicated directory holding ONLY what should be public: index.html and the
+# provider logos. Pointing this at the repo root instead would serve the server
+# source, the README and the dotfiles — and would put wrangler's own .wrangler/
+# scratch directory under the dev watcher, which sends `wrangler dev` into a
+# reload loop. Keeping the boundary structural beats maintaining a denylist.
+directory = "public"
+binding = "ASSETS"
+
+# Secrets are NOT declared here. They are set with:
+#   npx wrangler secret put SERANKING_API_KEY
+#   npx wrangler secret put MCP_PROXY_SECRET
+#   npx wrangler secret put ALLOW_MCP_WITHOUT_ACCESS   (only until Access is on)
+# MCP_PROXY_URL is deliberately left unset so the proxy follows the request
+# origin — see proxyUrlFor() in functions/api/chat.js.
