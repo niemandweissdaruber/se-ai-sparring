@@ -3,9 +3,26 @@
 A chat tool where one AI answers and a second AI critiques that answer — so you never have to trust a single model.
 
 - **Primary model** runs the main chat.
-- **Critic model** gives a "second opinion" on any reply (whole message or a highlighted excerpt).
+- **Critic model** gives a "second opinion" on any reply, in one of two modes.
 - **Send back** feeds the critique to the primary model for a rebuttal.
 - **Toggle** which model is primary at any time.
+
+### Two review modes
+
+The panel badges which one is running, because they ask the reviewer different questions.
+
+| | **Full review** | **Passage review** |
+|---|---|---|
+| Started by | the **Second opinion** button on a reply | highlighting text inside a reply |
+| The reviewer is asked | *does this answer hold up?* — and, on a rebuttal, *does it respond to your earlier critique?* | *what do you think about this specific advice?* |
+| Earlier critique | sent as the message being answered | sent as **background only**, labelled "NOT what you are reviewing now" |
+| Extra input | — | an optional "anything you're unsure about?" note, asked **before** the request so it costs nothing extra |
+| **Send back** produces | a new Rebuttal message in the thread | an inline note attached to the highlighted passage — the reply revises or defends *that passage only* |
+
+A passage review also carries the text on either side of the highlight and the
+nearest heading above it, as context the reviewer is told not to judge. Rebuttals
+inherit the mode of the review they answer, and both providers are handed exactly
+the same system prompt and message list — there is no provider-specific wording.
 
 **Bring your own key.** The app ships with no API keys. Each visitor pastes their own
 Anthropic and/or OpenAI key in Settings; the key is stored in that person's browser and

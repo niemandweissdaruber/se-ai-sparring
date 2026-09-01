@@ -1621,6 +1621,148 @@
     }
     .float-critique.show { display: inline-flex; }
 
+    /* ---- Review mode: full vs passage -------------------------------- */
+    /* The badge in the panel head. It answers the only question that matters
+       about a review in flight: is this about the whole answer, or about the
+       bit I highlighted? */
+    .mode-badge {
+      display: inline-block;
+      vertical-align: 2px;
+      margin-left: 7px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border: 1px solid var(--border);
+      background: var(--bg-0);
+      color: var(--text-faint);
+    }
+    .mode-badge.passage {
+      border-color: var(--critic-accent);
+      color: var(--critic-accent);
+    }
+
+    /* The "Reviewing:" excerpt collapses to ~200 characters. The full text is
+       always in the title attribute (hover), and the toggle expands it in
+       place for anyone who can't hover. */
+    .critique-context { max-height: none; }
+    .critique-context .excerpt-rest { display: none; }
+    .critique-context.expanded .excerpt-rest { display: inline; }
+    .critique-context.expanded .excerpt-ellipsis { display: none; }
+    .excerpt-toggle {
+      display: block;
+      margin-top: 6px;
+      font: inherit;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--critic-accent);
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+    }
+    .excerpt-toggle:hover { text-decoration: underline; }
+
+    /* Pre-flight for a passage review: the optional "anything you're unsure
+       about?" note. Shown before the request so the note can actually reach
+       the reviewer, rather than after, which would cost a second call. */
+    .passage-note-form { margin-bottom: 14px; }
+    .passage-note-form label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-faint);
+      margin-bottom: 6px;
+    }
+    .passage-note-form input {
+      width: 100%;
+      font: inherit;
+      font-size: 13.5px;
+      color: var(--text);
+      background: var(--bg-0);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 11px;
+      outline: none;
+    }
+    .passage-note-form input:focus { border-color: var(--critic-accent); }
+    .passage-note-form .go {
+      margin-top: 9px;
+      width: 100%;
+      font: inherit;
+      font-size: 13.5px;
+      font-weight: 700;
+      color: #0e0f13;
+      background: var(--critic-accent);
+      border: none;
+      border-radius: var(--radius-sm);
+      padding: 11px;
+      cursor: pointer;
+    }
+    .passage-note-form .go:hover { filter: brightness(1.07); }
+    /* Echo of a note that was actually asked, shown alongside the excerpt. */
+    .critique-note {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border-soft);
+      color: var(--text-dim);
+    }
+
+    /* ---- Inline passage annotations ---------------------------------- */
+    /* A passage rebuttal doesn't become a new bubble — it attaches to the
+       passage it is about, inside the original answer. */
+    mark.passage-mark {
+      /* Two declarations on purpose: a browser without color-mix drops the
+         second and keeps the first, rather than falling back to the UA's
+         black-on-yellow <mark> default. */
+      background: rgba(255, 255, 255, 0.11);
+      background: color-mix(in srgb, var(--critic-accent) 22%, transparent);
+      color: inherit;
+      border-radius: 3px;
+      padding: 0 1px;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+    }
+    .passage-note {
+      margin: 10px 0 12px;
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--critic-accent);
+      border-radius: var(--radius-sm);
+      background: var(--bg-0);
+      padding: 11px 13px;
+      font-size: 13.5px;
+      line-height: 1.6;
+      animation: fadein 0.3s ease both;
+    }
+    .passage-note .note-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      margin-bottom: 8px;
+    }
+    .passage-note .note-review {
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border-soft);
+      padding-bottom: 9px;
+      margin-bottom: 9px;
+    }
+    .passage-note .note-reply-head {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      margin-bottom: 6px;
+    }
+    .passage-note .note-reply { color: var(--text); }
+    .passage-note .md p:last-child { margin-bottom: 0; }
+
     /* ---- Friendly error banner --------------------------------------- */
     .banner {
       flex: none;
@@ -1882,7 +2024,7 @@
             <div class="panel-title">
               <span class="badge sm" id="panel-badge">G</span>
               <div>
-                Second opinion
+                Second opinion<span class="mode-badge" id="panel-mode">Full review</span>
                 <small id="panel-sub">Reviewed by ChatGPT</small>
               </div>
             </div>
@@ -2098,9 +2240,51 @@
   let msgSeq = 0;                       // local id counter for records
   // The last critique shown in the panel, so "Send back" knows what to feed.
   // criticModel is captured too, so a mid-flight role swap can't mislabel it.
-  let lastCritique = { text: "", sourceQuestion: "", criticModel: "" };
-  // Remembers a text selection inside a reply for "Critique selection".
-  let pendingSelection = { text: "", question: "" };
+  //
+  // REVIEW MODE — the field that decides what the reviewer was actually asked:
+  //   "full"     the whole message was under review. Sending it back asks the
+  //              primary model to respond to a critique of its answer.
+  //   "passage"  one highlighted passage was under review. The reviewer was
+  //              never shown the earlier critique as the thing being answered
+  //              (see functions/api/chat.js), and sending it back asks for a
+  //              revision of THAT PASSAGE ONLY — rendered inline against the
+  //              passage rather than as a new message.
+  // A rebuttal always inherits the mode of the review it answers.
+  let lastCritique = emptyCritique();
+
+  // The shape every critique record shares. Passage fields are present and
+  // empty in full mode, so nothing downstream has to test for their existence.
+  function emptyCritique() {
+    return {
+      text: "",
+      sourceQuestion: "",
+      criticModel: "",
+      truncated: false,
+      stopped: false,
+      usage: null,
+      apiModel: null,
+      tools: null,            // SE Ranking calls the review itself made
+      mode: "full",           // "full" | "passage"
+      targetText: "",         // full mode: the whole message under review
+      selectionText: "",      // passage mode: what was highlighted
+      contextBefore: "",      // passage mode: text immediately before it
+      contextAfter: "",       // passage mode: text immediately after it
+      sectionHeading: "",     // passage mode: nearest heading above it
+      userNote: "",           // passage mode: the reader's optional question
+      priorCritique: "",      // the reviewer's own last full critique, if any
+      targetId: null,         // id of the message record the passage lives in
+    };
+  }
+
+  // Which mode the panel is currently showing. Set before a request exists —
+  // the passage pre-flight opens the panel with nothing in it yet — so the
+  // badge and the footer button both read from here rather than lastCritique.
+  let panelReviewMode = "full";
+
+  // Remembers a text selection inside a reply for "Critique selection",
+  // including where in the answer it sat — the reviewer is told the passage's
+  // surroundings so it can read it in context without reviewing them.
+  let pendingSelection = emptyCritique();
 
   const $ = (id) => document.getElementById(id);
 
@@ -2457,6 +2641,9 @@
       // so far and let it repaint on a throttle.
       renderMarkdownInto(bubble, rec.text, { streaming: !!rec.streaming });
       if (rec.streaming) appendCursor(bubble);
+      // Passage reviews attach to the text they are about, not to the end of
+      // the thread. Never while the reply itself is still arriving.
+      else applyAnnotations(bubble, rec);
     } else {
       bubble.textContent = rec.text;          // our own input: plain text
     }
@@ -2488,7 +2675,7 @@
         btn.type = "button";
         btn.className = "act-btn second-opinion";
         btn.innerHTML = `<span class="dot"></span> Second opinion`;
-        btn.onclick = () => critiqueMessage(rec.text);
+        btn.onclick = () => critiqueMessage(rec);
         // Gated here, at build time, so a message rendered by ANY path
         // (first paint, stream finishing, Continue) starts correctly.
         // applyCriticAvailability() then keeps it in sync as keys change.
@@ -2538,6 +2725,13 @@
       usage: null,       // normalized token counts from the API, or null
       apiModel: null,    // exact provider model ID, for the PRICING lookup
       tools: null,       // [{server,name}] SE Ranking calls this reply made
+      // Which kind of review produced this message. Only meaningful on
+      // critique / rebuttal records; a rebuttal always matches the review it
+      // answers. See emptyCritique().
+      reviewMode: "full",
+      // Passage reviews that were sent back, rendered inline against the
+      // passage they concern rather than as their own messages.
+      annotations: null,
       ...rec,
     };
     messages.push(record);
@@ -2572,6 +2766,236 @@
       const btn = rec.el && rec.el.querySelector(".continue-btn");
       if (btn && !canContinue(rec)) btn.remove();
     });
+  }
+
+  // =====================================================================
+  //  Inline passage annotations
+  //
+  //  A passage review + its reply live INSIDE the message they are about:
+  //  the passage is highlighted, and the note sits directly after the block
+  //  containing it. Rebuilt from `rec.annotations` on every render, so a
+  //  Continue, a reload or a re-render restores them from data alone.
+  // =====================================================================
+  let annSeq = 0;                     // local id counter for annotations
+
+  function applyAnnotations(bubble, rec) {
+    const notes = Array.isArray(rec.annotations) ? rec.annotations : [];
+    if (!notes.length) return;
+
+    // Highlight every passage FIRST. Inserting a note adds text to the bubble,
+    // which would shift the offsets a later passage search relies on.
+    const placed = notes.map((note) => ({
+      note,
+      marks: markPassage(bubble, note.selectionText),
+    }));
+
+    placed.forEach(({ note, marks }) => {
+      const el = buildPassageNote(note);
+      const last = marks && marks[marks.length - 1];
+      const anchor = last ? blockAncestor(last, bubble) : null;
+      // No anchor means the passage couldn't be located in the re-rendered
+      // markdown (an edited message, say). The note still belongs to this
+      // message, so it goes at the end rather than being dropped.
+      if (anchor && anchor.parentNode === bubble) {
+        bubble.insertBefore(el, anchor.nextSibling);
+      } else {
+        bubble.appendChild(el);
+      }
+    });
+  }
+
+  // Wrap `passage` in <mark> wherever it occurs in `bubble`, and return the
+  // marks. Matching ignores differences in whitespace runs, because the text a
+  // reader selected in one rendering can be laid out differently in the next.
+  function markPassage(bubble, passage) {
+    const needle = (passage || "").trim();
+    if (!needle) return null;
+
+    // Flatten the bubble's text nodes into one string, remembering where each
+    // node starts so a match can be mapped back onto them.
+    const nodes = [];
+    let full = "";
+    const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      nodes.push({ node: n, start: full.length });
+      full += n.nodeValue;
+    }
+
+    const hit = findLoose(full, needle);
+    if (!hit) return null;
+
+    const marks = [];
+    nodes.forEach((entry) => {
+      const value = entry.node.nodeValue;
+      const nStart = entry.start;
+      const nEnd = nStart + value.length;
+      if (nEnd <= hit.start || nStart >= hit.end) return;      // no overlap
+
+      const from = Math.max(0, hit.start - nStart);
+      const to = Math.min(value.length, hit.end - nStart);
+      if (to <= from) return;
+
+      // Split off the parts outside the match, then wrap what's left. The
+      // offsets above were measured before any split, and splitting only ever
+      // creates nodes AFTER this one, so the remaining entries stay correct.
+      let node = entry.node;
+      if (to < value.length) node.splitText(to);
+      if (from > 0) node = node.splitText(from);
+
+      const mark = document.createElement("mark");
+      mark.className = "passage-mark";
+      node.parentNode.replaceChild(mark, node);
+      mark.appendChild(node);
+      marks.push(mark);
+    });
+
+    return marks.length ? marks : null;
+  }
+
+  // Find `needle` in `hay`, tolerating any difference in whitespace runs.
+  // Returns offsets into the ORIGINAL string, or null.
+  function findLoose(hay, needle) {
+    const exact = hay.indexOf(needle);
+    if (exact !== -1) return { start: exact, end: exact + needle.length };
+
+    // Collapse whitespace on both sides, keeping a map from each character of
+    // the collapsed haystack back to its index in the original.
+    const map = [];
+    let flat = "";
+    let inSpace = false;
+    for (let i = 0; i < hay.length; i++) {
+      if (/\s/.test(hay[i])) {
+        if (inSpace) continue;
+        inSpace = true;
+        map.push(i);
+        flat += " ";
+      } else {
+        inSpace = false;
+        map.push(i);
+        flat += hay[i];
+      }
+    }
+
+    const flatNeedle = needle.replace(/\s+/g, " ").trim();
+    if (!flatNeedle) return null;
+    const at = flat.indexOf(flatNeedle);
+    if (at === -1) return null;
+
+    const start = map[at];
+    const lastIdx = at + flatNeedle.length - 1;
+    // +1 because `map` points at the first character of each run.
+    const end = map[lastIdx] + 1;
+    return { start, end };
+  }
+
+  // The child of `root` that contains `node` — where a note gets inserted, so
+  // it lands between blocks rather than inside a paragraph.
+  function blockAncestor(node, root) {
+    let el = node;
+    while (el && el.parentNode && el.parentNode !== root) el = el.parentNode;
+    return el && el.parentNode === root ? el : null;
+  }
+
+  function buildPassageNote(note) {
+    const el = document.createElement("div");
+    el.className = "passage-note";
+    el.dataset.note = String(note.id);
+
+    const head = document.createElement("div");
+    head.className = "note-head";
+    head.innerHTML =
+      badgeHTML(note.criticModel) + " Passage review";
+    el.appendChild(head);
+
+    // What the reviewer said about this passage.
+    const review = document.createElement("div");
+    review.className = "note-review";
+    renderMarkdownInto(review, note.reviewText);
+    el.appendChild(review);
+
+    const replyHead = document.createElement("div");
+    replyHead.className = "note-reply-head";
+    replyHead.textContent =
+      (MODELS[note.model] ? MODELS[note.model].name : "The author") + "'s response";
+    el.appendChild(replyHead);
+
+    // Wrapper so SE Ranking tool chips have somewhere to sit that survives the
+    // markdown repaints (refreshToolChips prepends into the reply's parent).
+    const replyWrap = document.createElement("div");
+    replyWrap.className = "mcp-card-wrap";
+    const reply = document.createElement("div");
+    reply.className = "note-reply";
+    reply.dataset.reply = String(note.id);
+    renderMarkdownInto(reply, note.text, { streaming: !!note.streaming });
+    if (note.streaming) appendCursor(reply);
+    const chips = buildToolChips(note.tools);
+    if (chips) replyWrap.appendChild(chips);
+    replyWrap.appendChild(reply);
+    el.appendChild(replyWrap);
+
+    if (!note.streaming) {
+      if (note.truncated || note.stopped || note.interrupted) {
+        el.appendChild(makeCutoffNote(note));
+      }
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      actions.appendChild(makeCopyButton(() => note.text));
+      el.appendChild(actions);
+
+      const usage = buildUsageLine(note);
+      if (usage) el.appendChild(usage);
+    }
+
+    return el;
+  }
+
+  // Strip DOM nodes and coerce stored annotations back into the shape the
+  // renderer expects. Anything without a passage and a review is discarded —
+  // a note that can't say what it is about has nothing to show.
+  function normalizeAnnotations(raw) {
+    if (!Array.isArray(raw)) return null;
+    const out = raw
+      .filter((n) => n && typeof n.selectionText === "string" &&
+                     typeof n.reviewText === "string" &&
+                     n.selectionText && n.reviewText)
+      .map((n) => ({
+        id: ++annSeq,
+        selectionText: n.selectionText,
+        reviewText: n.reviewText,
+        userNote: typeof n.userNote === "string" ? n.userNote : "",
+        criticModel: MODELS[n.criticModel] ? n.criticModel : critic,
+        model: MODELS[n.model] ? n.model : primary,
+        text: typeof n.text === "string" ? n.text : "",
+        streaming: false,
+        // A reply still in flight when the page went away comes back the same
+        // way a cut-off bubble does: shown, with the "didn't finish" notice.
+        truncated: !!n.truncated,
+        stopped: !!n.stopped,
+        interrupted: !!(n.streaming || n.interrupted),
+        usage: normalizeUsage(n.usage),
+        apiModel: typeof n.apiModel === "string" ? n.apiModel : null,
+        tools: normalizeToolCalls(n.tools),
+      }));
+    return out.length ? out : null;
+  }
+
+  // The persistable form of an annotation — plain data only.
+  function serializeAnnotations(raw) {
+    if (!Array.isArray(raw) || !raw.length) return null;
+    return raw.map((n) => ({
+      selectionText: n.selectionText,
+      reviewText: n.reviewText,
+      userNote: n.userNote || "",
+      criticModel: n.criticModel,
+      model: n.model,
+      text: n.text,
+      truncated: !!n.truncated,
+      stopped: !!n.stopped,
+      interrupted: !!(n.streaming || n.interrupted),
+      usage: n.usage || null,
+      apiModel: n.apiModel || null,
+      tools: Array.isArray(n.tools) && n.tools.length ? n.tools : null,
+    }));
   }
 
   // The small "didn't finish" notice. Informational, not an error.
@@ -2699,11 +3123,15 @@
 
     // The bubble appears immediately with a caret and fills in as text
     // arrives — no blank wait.
+    // A rebuttal inherits the mode of the review it answers (opts.reviewMode);
+    // an ordinary turn is neither kind of review.
+    const reviewMode = opts.reviewMode === "passage" ? "passage" : "full";
     const rec = addMessage({
       role: "assistant",
       text: "",
       model,
       kind,
+      reviewMode,
       streaming: true,
     });
     scrollDownForce();
@@ -2739,6 +3167,7 @@
         text: data.text,
         model,
         kind,
+        reviewMode,
         truncated: !!data.truncated,
         usage: fallbackUsage,
         apiModel: data.model || null,
@@ -2899,44 +3328,172 @@
 
   // --- Critique (whole message OR a selection) -----------------------
   // The user's most recent question gives the critic context.
+  //
+  // Read from `messages`, NOT from `history`: history also carries the framed
+  // turns that promote a critique back into the conversation, and those are
+  // plumbing, not questions. Taking the tail of history would hand the next
+  // reviewer "A reviewer gave this critique of your previous answer…" as the
+  // thing the user asked.
   function lastUserQuestion() {
-    for (let i = history.length - 1; i >= 0; i--) {
-      if (history[i].role === "user") return history[i].content;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user") return messages[i].text;
     }
     return "";
   }
 
-  async function critiqueMessage(fullText) {
+  async function critiqueMessage(rec) {
     // Guarded here as well as on the button, so the selection shortcut and
     // any future caller get the same treatment.
     if (!hasKey(critic)) {
       openSettings(critic);
       return;
     }
-    await runCritique(fullText, lastUserQuestion());
+    // The whole-message path: mode "full", exactly as before.
+    await runCritique({
+      ...emptyCritique(),
+      mode: "full",
+      targetText: rec.text,
+      sourceQuestion: lastUserQuestion(),
+      targetId: rec.id,
+    });
+  }
+
+  // --- The panel's mode badge ----------------------------------------
+  // "Full review" vs "Passage review" — the single most important thing to
+  // know about a review on screen, because it changes what was asked.
+  function setPanelMode(mode) {
+    panelReviewMode = mode === "passage" ? "passage" : "full";
+    const el = $("panel-mode");
+    const passage = panelReviewMode === "passage";
+    el.textContent = passage ? "Passage review" : "Full review";
+    el.classList.toggle("passage", passage);
+    applyPanelButton();          // the footer label follows the same mode
+  }
+
+  // --- The "Reviewing:" excerpt --------------------------------------
+  // Truncated to ~200 characters, with the full text on hover (title) and an
+  // expand toggle for anyone who can't hover.
+  const EXCERPT_CHARS = 200;
+
+  function buildReviewingBlock(review) {
+    const ctx = document.createElement("div");
+    ctx.className = "critique-context";
+
+    const text =
+      (review.mode === "passage" ? review.selectionText : review.targetText) || "";
+
+    const label = document.createElement("b");
+    label.textContent = "Reviewing:";
+    ctx.appendChild(label);
+    ctx.appendChild(document.createTextNode(" "));
+
+    // textContent throughout — model output never becomes markup here.
+    const head = document.createElement("span");
+    head.textContent = text.slice(0, EXCERPT_CHARS);
+    ctx.appendChild(head);
+
+    if (text.length > EXCERPT_CHARS) {
+      const ell = document.createElement("span");
+      ell.className = "excerpt-ellipsis";
+      ell.textContent = "…";
+      const rest = document.createElement("span");
+      rest.className = "excerpt-rest";
+      rest.textContent = text.slice(EXCERPT_CHARS);
+      ctx.appendChild(ell);
+      ctx.appendChild(rest);
+      ctx.title = text;                       // hover shows all of it
+
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "excerpt-toggle";
+      toggle.textContent = "Show all";
+      toggle.onclick = () => {
+        const open = ctx.classList.toggle("expanded");
+        toggle.textContent = open ? "Show less" : "Show all";
+      };
+      ctx.appendChild(toggle);
+    }
+
+    if (review.mode === "passage" && review.userNote) {
+      const note = document.createElement("div");
+      note.className = "critique-note";
+      const b = document.createElement("b");
+      b.textContent = "You asked:";
+      note.appendChild(b);
+      note.appendChild(document.createTextNode(" " + review.userNote));
+      ctx.appendChild(note);
+    }
+
+    return ctx;
+  }
+
+  // --- Passage pre-flight --------------------------------------------
+  // A passage review pauses for one optional line from the reader before it
+  // fires. The note has to exist BEFORE the request — it goes into the
+  // reviewer's system prompt — and asking for it afterwards would mean paying
+  // for a second review to use it.
+  function openPassagePrompt(sel) {
+    hideBanner();
+    openPanel();
+    setPanelMode("passage");
+    $("send-back").disabled = true;
+
+    const body = $("panel-body");
+    body.innerHTML = "";
+    body.appendChild(buildReviewingBlock(sel));
+
+    const form = document.createElement("form");
+    form.className = "passage-note-form";
+
+    const label = document.createElement("label");
+    label.htmlFor = "passage-note";
+    label.textContent = "Anything specific you're unsure about?";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.id = "passage-note";
+    input.placeholder = "Optional — press Enter to skip";
+    input.maxLength = 500;
+    input.autocomplete = "off";
+
+    const go = document.createElement("button");
+    go.type = "submit";
+    go.className = "go";
+    go.textContent = `Ask ${MODELS[critic].name} about this passage`;
+
+    form.appendChild(label);
+    form.appendChild(input);
+    form.appendChild(go);
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      go.disabled = true;
+      runCritique({ ...sel, userNote: input.value.trim() });
+    };
+
+    body.appendChild(form);
+    panelScroller.reset();
+    input.focus();
   }
 
   // Shared critique runner. The critique ARRIVES in the right-hand panel,
   // streaming in the same way as a chat reply; "Send back" is what promotes
-  // it into the main thread.
-  async function runCritique(targetText, question) {
+  // it into the main thread (full mode) or attaches it to the passage
+  // (passage mode).
+  //
+  // `review` is a critique record — see emptyCritique(). Its `mode` decides
+  // both the request shape and what "Send back" does afterwards.
+  async function runCritique(review) {
     hideBanner();
     openPanel();
+    setPanelMode(review.mode);
     $("send-back").disabled = true;
 
     const criticAtRequest = critic;   // pin the role for this request
-    const payload = {
-      provider: MODELS[criticAtRequest].provider,
-      mode: "critique",
-      question: question,
-      targetText: targetText,
-    };
+    const payload = buildCritiquePayload(review, criticAtRequest);
 
     // Build the panel shell up front: the excerpt being reviewed, then an
     // empty card the critique streams into.
-    const ctx = document.createElement("div");
-    ctx.className = "critique-context";
-    ctx.innerHTML = `<b>Reviewing:</b> ` + escapeHtml(truncate(targetText, 220));
+    const ctx = buildReviewingBlock(review);
 
     const card = document.createElement("div");
     card.className = "critique-card";
@@ -2954,15 +3511,7 @@
     panelScroller.reset();
 
     // streamText mutates .text on this object as chunks arrive.
-    lastCritique = {
-      text: "",
-      sourceQuestion: question,
-      criticModel: criticAtRequest,
-      truncated: false,
-      stopped: false,
-      usage: null,        // carried into the thread when "Send back" is used
-      apiModel: null,
-    };
+    lastCritique = { ...review, text: "", criticModel: criticAtRequest };
 
     const out = await streamText(lastCritique, card, payload, "panel",
                                  () => panelScroller.tick(), "critique");
@@ -3028,9 +3577,7 @@
     const actions = document.createElement("div");
     actions.className = "actions";
     if (lastCritique.truncated || lastCritique.stopped) {
-      actions.appendChild(
-        makePanelContinueButton(card, criticAtRequest, question, targetText)
-      );
+      actions.appendChild(makePanelContinueButton(card, criticAtRequest));
     }
     actions.appendChild(makeCopyButton(() => lastCritique.text));
     bodyEl.appendChild(actions);
@@ -3042,12 +3589,39 @@
     $("send-back").disabled = false;
   }
 
+  // The request body for a review. Full mode is byte-for-byte the payload
+  // this app has always sent; passage mode adds `reviewMode` and moves the
+  // subject into a `passage` object, with the earlier critique travelling
+  // separately as background only.
+  function buildCritiquePayload(review, criticModel) {
+    const base = {
+      provider: MODELS[criticModel].provider,
+      mode: "critique",
+      question: review.sourceQuestion,
+    };
+    if (review.mode !== "passage") {
+      return { ...base, targetText: review.targetText };
+    }
+    return {
+      ...base,
+      reviewMode: "passage",
+      passage: {
+        selectionText: review.selectionText,
+        contextBefore: review.contextBefore,
+        contextAfter: review.contextAfter,
+        sectionHeading: review.sectionHeading,
+        userNote: review.userNote,
+      },
+      priorCritique: review.priorCritique,
+    };
+  }
+
   // Continue for the critique living in the panel. A critique isn't part of
   // `history` (it's a one-shot call), so we rebuild its own little
   // conversation: the review request, the partial answer, then the nudge.
   // The continuation is appended into the same card and into
   // lastCritique.text, so "Send back" carries the FULL critique.
-  function makePanelContinueButton(card, criticModel, question, targetText) {
+  function makePanelContinueButton(card, criticModel) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "act-btn continue-btn";
@@ -3057,20 +3631,8 @@
       btn.disabled = true;
       btn.innerHTML = ICON_CONTINUE + "<span>Continuing…</span>";
 
-      // Mirrors the wording the server uses to build a critique request, so
-      // the model sees the same context it saw the first time.
-      const ctxLine = question
-        ? 'The user originally asked:\n"""' + question + '"""\n\n'
-        : "";
       const seed = [
-        {
-          role: "user",
-          content:
-            ctxLine +
-            'Here is the other assistant\'s answer to review:\n"""' +
-            (targetText || "") +
-            '"""',
-        },
+        { role: "user", content: continuationSeed(lastCritique) },
         { role: "assistant", content: lastCritique.text },
         { role: "user", content: CONTINUE_PROMPT },
       ];
@@ -3120,9 +3682,43 @@
     return btn;
   }
 
+  // Rebuilds the user turn the reviewer originally saw, so a continuation
+  // resumes with the same context. Mirrors what the server builds in each
+  // mode — see buildMessages() / buildPassageSystemPrompt().
+  function continuationSeed(review) {
+    if (review.mode === "passage") {
+      const bits = [];
+      if (review.sourceQuestion) {
+        bits.push('The user originally asked:\n"""' + review.sourceQuestion + '"""');
+      }
+      bits.push(
+        'You were giving a second opinion on this one highlighted passage:\n"""' +
+        (review.selectionText || "") + '"""'
+      );
+      if (review.userNote) bits.push("The user also asked: " + review.userNote);
+      return bits.join("\n\n");
+    }
+    const ctxLine = review.sourceQuestion
+      ? 'The user originally asked:\n"""' + review.sourceQuestion + '"""\n\n'
+      : "";
+    return (
+      ctxLine +
+      'Here is the other assistant\'s answer to review:\n"""' +
+      (review.targetText || "") +
+      '"""'
+    );
+  }
+
   // --- Send critique back to the primary model -----------------------
+  // Two shapes, decided by the review's mode:
+  //   full     the critique becomes a message in the thread and the primary
+  //            model answers it as a rebuttal — a new bubble.
+  //   passage  neither becomes a bubble. The exchange attaches to the passage
+  //            it is about, inline in the original answer.
   async function sendBack() {
     if (!lastCritique.text) return;
+    if (lastCritique.mode === "passage") return sendBackPassage();
+
     closePanel();
 
     // Promote the critique into the main thread as its own message, attributed
@@ -3135,6 +3731,7 @@
       text: lastCritique.text,
       model: lastCritique.criticModel || critic,
       kind: "critique",
+      reviewMode: "full",
       truncated: !!lastCritique.truncated,
       usage: lastCritique.usage,
       apiModel: lastCritique.apiModel,
@@ -3151,7 +3748,158 @@
       `Please respond to it.`;
     history.push({ role: "user", content: framed });
 
-    await runPrimaryTurn({ rebuttal: true });
+    // A rebuttal inherits the mode of the review it answers.
+    await runPrimaryTurn({ rebuttal: true, reviewMode: "full" });
+  }
+
+  // --- Passage rebuttal: inline, not a new message --------------------
+  // The reviewer commented on one passage, so the reply is about that passage.
+  // Making it a full bubble would imply the whole answer was rewritten, which
+  // is exactly what the server's rebuttalPassage prompt forbids. It becomes an
+  // annotation on the original message instead: the passage is highlighted,
+  // and the review + response sit directly beneath it.
+  async function sendBackPassage() {
+    const review = lastCritique;
+    const target =
+      messages.find((m) => m.id === review.targetId && m.role === "assistant") ||
+      lastAnnotatableMessage();
+
+    if (!target) {
+      // The message was deleted or the conversation was swapped out from
+      // under the panel. Say so rather than silently dropping the review.
+      handleError(
+        { message: "The passage this review belongs to is no longer on screen." },
+        primary
+      );
+      return;
+    }
+
+    closePanel();
+    setBusy(true);
+
+    const model = primary;             // pin the role for this turn
+    const note = {
+      id: ++annSeq,
+      selectionText: review.selectionText,
+      criticModel: review.criticModel || critic,
+      reviewText: review.text,
+      userNote: review.userNote || "",
+      model,                           // who is answering
+      text: "",                        // streamText writes here
+      streaming: true,
+      truncated: false,
+      stopped: false,
+      usage: null,
+      apiModel: null,
+      tools: null,
+    };
+    target.annotations = (target.annotations || []).concat(note);
+    refreshMessage(target);            // paints the highlight + the note shell
+
+    // The exchange still enters `history` so later turns remember it — it just
+    // never becomes a bubble, exactly like the framed critique turn in full
+    // mode. The server's passage rebuttal prompt does the rest of the framing.
+    history.push({ role: "user", content: framePassageRebuttal(review) });
+
+    const payload = {
+      provider: MODELS[model].provider,
+      mode: "rebuttal",
+      reviewMode: "passage",
+      messages: history,
+    };
+
+    const el = noteReplyEl(target, note.id);
+    if (!el) {
+      // The note's element didn't survive the re-render (a concurrent load,
+      // say). Undo rather than stream into nothing.
+      dropAnnotation(target, note);
+      history.pop();
+      setBusy(false);
+      return;
+    }
+    const out = await streamText(note, el, payload, "chat",
+                                 () => chatScroller.tick(), "rebuttal");
+    note.streaming = false;
+
+    // --- Nothing streamed: fall back to the blocking request -----------
+    if (!out.started) {
+      let data = out.json;
+      if (!data) {
+        setPhase("rebuttal");
+        data = await callApi(payload).catch(() => ({ error: "network" }));
+        clearPhase();
+      }
+      if (data.error) {
+        // Undo cleanly: no half-attached annotation, no orphan history turn.
+        dropAnnotation(target, note);
+        history.pop();
+        handleError(data, model);
+        setBusy(false);
+        return;
+      }
+      note.text = data.text;
+      note.truncated = !!data.truncated;
+      note.usage = normalizeUsage(data.usage);
+      note.apiModel = data.model || null;
+    } else {
+      note.truncated = out.truncated;
+      note.stopped = !!out.aborted;
+      note.usage = out.usage;
+      note.apiModel = out.apiModel;
+      if (out.errorMessage) handleError({ message: out.errorMessage }, model);
+    }
+
+    // Stopped or failed before a single character. The input tokens were sent
+    // and billed, so the estimate is still recorded — same rule as a bubble.
+    if (!note.text) {
+      recordSpend(MODELS[model].provider, note.apiModel, note.usage);
+      dropAnnotation(target, note);
+      history.pop();
+      setBusy(false);
+      saveCurrent();
+      return;
+    }
+
+    history.push({ role: "assistant", content: note.text });
+    recordSpend(MODELS[model].provider, note.apiModel, note.usage);
+    refreshMessage(target);            // final render: markdown + copy + usage
+    // A new turn at the tail of `history` can invalidate older Continue
+    // buttons, and this path never went through addMessage().
+    refreshContinueButtons(target);
+    setBusy(false);
+    saveCurrent();
+  }
+
+  // The user turn that carries a passage rebuttal. Never rendered as a bubble.
+  function framePassageRebuttal(review) {
+    const bits = [
+      'A reviewer commented on this one passage of your previous answer:\n"""' +
+      (review.selectionText || "") + '"""',
+    ];
+    if (review.userNote) bits.push("The user asked about it: " + review.userNote);
+    bits.push('Their comment:\n"""' + review.text + '"""');
+    return bits.join("\n\n");
+  }
+
+  // The newest assistant message that can carry an annotation — the fallback
+  // when the record the passage came from can no longer be found by id.
+  function lastAnnotatableMessage() {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "assistant" && m.kind !== "critique") return m;
+    }
+    return null;
+  }
+
+  function dropAnnotation(target, note) {
+    target.annotations = (target.annotations || []).filter((n) => n !== note);
+    if (!target.annotations.length) target.annotations = null;
+    refreshMessage(target);
+  }
+
+  // The element a passage reply streams into, inside the freshly built message.
+  function noteReplyEl(target, id) {
+    return target.el.querySelector(`.note-reply[data-reply="${id}"]`);
   }
 
   // --- Text-selection → floating critique button ---------------------
@@ -3178,7 +3926,23 @@
     const bubble = start ? start.closest(".msg.assistant .bubble") : null;
     if (!bubble) { hideFloat(); return; }
 
-    pendingSelection = { text, question: lastUserQuestion() };
+    // A critique can't be re-critiqued (same loop the "Second opinion" button
+    // avoids), so don't offer a passage review inside one either.
+    const owner = messageRecordFor(bubble);
+    if (owner && owner.kind === "critique") { hideFloat(); return; }
+
+    pendingSelection = {
+      ...emptyCritique(),
+      mode: "passage",
+      sourceQuestion: lastUserQuestion(),
+      selectionText: text,
+      targetId: owner ? owner.id : null,
+      ...selectionSurroundings(sel, bubble),
+      // The reviewer's own last full critique in this conversation. It is sent
+      // ONLY as labelled background (see the server) — never as the message
+      // being answered, which is the whole point of passage mode.
+      priorCritique: lastFullCritiqueText(),
+    };
 
     // Position the button just above the selection.
     const rect = sel.getRangeAt(0).getBoundingClientRect();
@@ -3199,9 +3963,102 @@
   function onFloatClick(e) {
     e.preventDefault();
     hideFloat();
-    if (pendingSelection.text) {
-      runCritique(pendingSelection.text, pendingSelection.question);
+    if (!pendingSelection.selectionText) return;
+    if (!hasKey(critic)) { openSettings(critic); return; }
+    // Passage reviews get a pre-flight step rather than firing immediately:
+    // the optional note has to exist BEFORE the request, or it can't reach the
+    // reviewer without paying for a second call.
+    openPassagePrompt(pendingSelection);
+  }
+
+  // --- Where a highlighted passage sits ------------------------------
+  // The reviewer is shown the text on either side of the highlight and the
+  // heading above it, labelled as context and explicitly not under review.
+  // Both are read off the SAME DOM the reader selected in, so what the model
+  // sees is what the reader saw.
+  const PASSAGE_CONTEXT_CHARS = 600;
+
+  function selectionSurroundings(sel, bubble) {
+    const blank = { contextBefore: "", contextAfter: "", sectionHeading: "" };
+    let range;
+    try { range = sel.getRangeAt(0); } catch { return blank; }
+
+    let before = "";
+    let after = "";
+    try {
+      // Walk the answer's own text, skipping any passage notes already
+      // attached to it. Those notes live INSIDE the bubble, so reading
+      // bubble.textContent would feed one review's output back to the next
+      // reviewer as if it were part of the answer.
+      const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) =>
+          n.parentElement && n.parentElement.closest(".passage-note")
+            ? NodeFilter.FILTER_REJECT
+            : NodeFilter.FILTER_ACCEPT,
+      });
+
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const len = n.nodeValue.length;
+        // comparePoint: -1 before the range, 0 inside it, 1 after it.
+        const head = range.comparePoint(n, 0);
+        const tail = range.comparePoint(n, len);
+        if (tail < 0) { before += n.nodeValue; continue; }   // wholly before
+        if (head > 0) { after += n.nodeValue; continue; }    // wholly after
+        // Straddles a boundary: only a boundary container can, so the offset
+        // to cut at is the range's own.
+        if (head < 0 && n === range.startContainer) {
+          before += n.nodeValue.slice(0, range.startOffset);
+        }
+        if (tail > 0 && n === range.endContainer) {
+          after += n.nodeValue.slice(range.endOffset);
+        }
+      }
+    } catch { return blank; }
+
+    return {
+      // Keep the part nearest the highlight: the tail of what precedes it and
+      // the head of what follows it.
+      contextBefore: tidy(before.slice(-PASSAGE_CONTEXT_CHARS)),
+      contextAfter: tidy(after.slice(0, PASSAGE_CONTEXT_CHARS)),
+      sectionHeading: nearestHeading(range.startContainer, bubble),
+    };
+  }
+
+  function tidy(s) { return (s || "").replace(/\s+/g, " ").trim(); }
+
+  // The last heading in this bubble that precedes (or contains) the node.
+  function nearestHeading(node, bubble) {
+    if (!node) return "";
+    const heads = [...bubble.querySelectorAll("h1,h2,h3,h4,h5,h6")]
+      .filter((h) => !h.closest(".passage-note"));   // notes aren't sections
+    let found = "";
+    for (const h of heads) {
+      const pos = h.compareDocumentPosition(node);
+      if (pos & Node.DOCUMENT_POSITION_CONTAINED_BY) return tidy(h.textContent);
+      // FOLLOWING means the node comes after this heading, so it's still a
+      // candidate; the last such heading is the nearest one above.
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) found = tidy(h.textContent);
+      else break;
     }
+    return found;
+  }
+
+  // Which message record owns a rendered bubble.
+  function messageRecordFor(el) {
+    const wrap = el && el.closest(".msg");
+    if (!wrap) return null;
+    return messages.find((m) => m.el === wrap) || null;
+  }
+
+  // The most recent FULL critique this conversation has seen, whether it was
+  // sent back into the thread or only ever shown in the panel.
+  function lastFullCritiqueText() {
+    if (lastCritique.mode === "full" && lastCritique.text) return lastCritique.text;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.kind === "critique" && m.reviewMode !== "passage") return m.text;
+    }
+    return "";
   }
 
   // --- Panel open/close ---------------------------------------------
@@ -4688,7 +5545,12 @@
       label.textContent = "Stop";
     } else {
       btn.classList.remove("stop");
-      label.textContent = `Send back to ${MODELS[primary].name}`;
+      // In passage mode the reply lands against the passage, not at the end of
+      // the thread — say so, so the button doesn't promise a new message.
+      label.textContent =
+        panelReviewMode === "passage"
+          ? `Ask ${MODELS[primary].name} about this passage`
+          : `Send back to ${MODELS[primary].name}`;
     }
   }
 
@@ -4784,9 +5646,16 @@
   //    { version, savedAt, conversations: [ {
   //        id, title, titleCustom, createdAt, updatedAt,
   //        primary, critic,
-  //        messages: [ { role, model, kind, text, truncated } ],  // render view
+  //        messages: [ { role, model, kind, text, truncated,
+  //                      reviewMode, annotations } ],             // render view
   //        history:  [ { role, content } ]                        // API view
   //      } ] }
+  //
+  //  `reviewMode` and `annotations` are additive and optional — a conversation
+  //  saved before passage reviews existed reads back as a full review with no
+  //  annotations, which is what it was. That is why SCHEMA_VERSION does NOT
+  //  move here: bumping it would discard every existing chat to add two
+  //  defaultable fields.
   //
   //  Both views are kept: `messages` rebuilds the bubbles (model attribution,
   //  CRITIQUE / REBUTTAL labels, cut-off notices), `history` is what the model
@@ -4866,6 +5735,10 @@
           usage: normalizeUsage(m.usage),
           apiModel: typeof m.apiModel === "string" ? m.apiModel : null,
           tools: normalizeToolCalls(m.tools),
+          reviewMode: m.reviewMode === "passage" ? "passage" : "full",
+          // Kept raw here: normalizeAnnotations() mints DOM ids, which only
+          // makes sense when the conversation is actually rendered.
+          annotations: Array.isArray(m.annotations) ? m.annotations : null,
         })),
       history: c.history
         .filter((h) => h && typeof h.content === "string" &&
@@ -4961,6 +5834,8 @@
       usage: (m === pending && pendingUsage ? pendingUsage : m.usage) || null,
       apiModel: m.apiModel || null,
       tools: Array.isArray(m.tools) && m.tools.length ? m.tools : null,
+      reviewMode: m.reviewMode === "passage" ? "passage" : "full",
+      annotations: serializeAnnotations(m.annotations),
     }));
 
     // `history` doesn't contain a streaming reply yet — it's pushed when the
@@ -5112,10 +5987,7 @@
     messages = [];
     msgSeq = 0;
     history = [];
-    lastCritique = {
-      text: "", sourceQuestion: "", criticModel: "",
-      truncated: false, stopped: false, usage: null, apiModel: null,
-    };
+    lastCritique = emptyCritique();
     // New chat, new subtotal. The all-time totals are untouched.
     convSpend = newSpendBucket();
     renderChatCost();
@@ -5154,7 +6026,7 @@
     messages = [];
     msgSeq = 0;
     $("messages").innerHTML = "";
-    lastCritique = { text: "", sourceQuestion: "", criticModel: "", truncated: false };
+    lastCritique = emptyCritique();
     $("panel-body").innerHTML = "";
     closePanel();
     hideBanner();
@@ -5174,6 +6046,8 @@
         usage: m.usage,
         apiModel: m.apiModel,
         tools: m.tools,
+        reviewMode: m.reviewMode,
+        annotations: normalizeAnnotations(m.annotations),
       })
     );
     renderChatCost();

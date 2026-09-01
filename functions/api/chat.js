@@ -66,7 +66,143 @@ const SYSTEM_PROMPTS = {
     "back where you think it is wrong or has misread you — explaining why. Do not " +
     "cave just to be agreeable, and do not defend a mistake. End with a corrected " +
     "version of your answer if anything changed.",
+
+  // The passage-mode counterpart of `rebuttal`. The whole point of a passage
+  // review is that it is NARROW, so the reply must be narrow too: no rewrite
+  // of the surrounding answer, no restructuring, just this one passage.
+  rebuttalPassage:
+    "The reviewer commented on one passage of your answer. Respond to that " +
+    "comment only. Do not rewrite or restructure the rest of the answer. " +
+    "Output either a revised version of that passage, or a short defense of it " +
+    "as written.",
 };
+
+// --- REVIEW MODES ---------------------------------------------------------
+// A review is one of two things, and the difference is not cosmetic — it
+// changes what the reviewer is being asked:
+//
+//   full     the reviewer judges a whole answer. When that answer is itself a
+//            rebuttal, the implicit question is "does this respond to your
+//            earlier critique?" — which is exactly right there.
+//
+//   passage  the reviewer judges ONE highlighted passage and nothing else.
+//            The implicit question is "what do you think about this specific
+//            advice?" — so the earlier critique must NOT be presented as the
+//            thing being answered, or the reviewer grades the passage as a
+//            reply to itself. It travels as background inside the system
+//            prompt instead, explicitly labelled as not-under-review.
+//
+// Both providers are handed the SAME `system` string and the SAME `messages`
+// array (see callAnthropic / callOpenAI, which differ only in where each API
+// wants the system prompt to sit). There is deliberately no provider-specific
+// wording anywhere in this file — a passage review reads identically whether
+// Claude or ChatGPT is the reviewer.
+const REVIEW_MODES = ["full", "passage"];
+
+// Upper bounds on every free-text field a passage review carries. A selection
+// is user-driven and could be an entire answer; these caps keep one request
+// from ballooning without changing what a normal highlight looks like.
+const PASSAGE_LIMITS = {
+  selectionText: 4000,
+  contextBefore: 1200,
+  contextAfter: 1200,
+  sectionHeading: 200,
+  userNote: 500,
+  priorCritique: 6000,
+};
+
+// Coerce to a trimmed string of at most `max` characters. Context is clipped
+// from the END for text that precedes the passage and from the START for text
+// that follows it, so what survives is always the part nearest the highlight.
+function clampText(value, max, keep = "start") {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (trimmed.length <= max) return trimmed;
+  return keep === "end"
+    ? "…" + trimmed.slice(-max)
+    : trimmed.slice(0, max) + "…";
+}
+
+// Normalize the passage payload once, up front, so neither the prompt builder
+// nor the message builder has to think about missing or oversized fields.
+function normalizePassage(raw) {
+  const p = raw && typeof raw === "object" ? raw : {};
+  return {
+    selectionText: clampText(p.selectionText, PASSAGE_LIMITS.selectionText),
+    contextBefore: clampText(p.contextBefore, PASSAGE_LIMITS.contextBefore, "end"),
+    contextAfter: clampText(p.contextAfter, PASSAGE_LIMITS.contextAfter),
+    sectionHeading: clampText(p.sectionHeading, PASSAGE_LIMITS.sectionHeading),
+    userNote: clampText(p.userNote, PASSAGE_LIMITS.userNote),
+  };
+}
+
+// The passage-review system prompt. Everything the reviewer needs is in here
+// — the passage, where it sits, the user's note, and (as background only) the
+// reviewer's own earlier critique. The user turn is a bare instruction.
+//
+// Empty fields are omitted rather than rendered as empty quotes: an empty
+// `Before: """"""` reads like "there is nothing before this", which is a
+// claim we can't make when the highlight simply couldn't be located.
+function buildPassageSystemPrompt({ question, passage, priorCritique }) {
+  const parts = [];
+
+  parts.push(
+    "You are giving a second opinion on ONE SPECIFIC PASSAGE the user\n" +
+    "highlighted. You are not reviewing the whole answer."
+  );
+
+  if (question) {
+    parts.push(`The user's original question: ${question}`);
+  }
+
+  parts.push(`The highlighted passage:\n"""${passage.selectionText}"""`);
+
+  const where = [];
+  if (passage.sectionHeading) where.push(`Section: ${passage.sectionHeading}`);
+  if (passage.contextBefore) where.push(`Before: """${passage.contextBefore}"""`);
+  if (passage.contextAfter) where.push(`After: """${passage.contextAfter}"""`);
+  if (where.length) {
+    parts.push(
+      "Where it sits (context only, not under review):\n" + where.join("\n")
+    );
+  }
+
+  if (passage.userNote) {
+    parts.push(`The user also asks: ${passage.userNote}`);
+  }
+
+  // The earlier critique goes HERE and nowhere else — never as the message
+  // being answered. The heading is doing real work: without it the reviewer
+  // reliably reads the passage as a reply to its own previous points.
+  const background = clampText(priorCritique, PASSAGE_LIMITS.priorCritique);
+  if (background) {
+    parts.push(
+      "Background — your earlier critique (NOT what you are reviewing now):\n" +
+      `"""${background}"""`
+    );
+  }
+
+  parts.push(
+    "Rules:\n" +
+    "- Judge only the highlighted passage.\n" +
+    "- This passage is NOT a response to any earlier critique of yours. Do not\n" +
+    "  evaluate it as one.\n" +
+    "- Do not fault it for omitting things covered elsewhere in the answer or\n" +
+    "  outside the highlight.\n" +
+    "- If your earlier critique already covered this point, say so in one line,\n" +
+    "  then give your view anyway."
+  );
+
+  parts.push(
+    "Format:\n" +
+    "- One-line verdict: Agree / Partly agree / Disagree / Depends on X\n" +
+    "- 2-4 bullets, each about this passage only\n" +
+    "- One closing line: what evidence would settle it\n" +
+    "Under 200 words."
+  );
+
+  return parts.join("\n\n");
+}
 
 // ---------------------------------------------------------------------------
 // Route handler — Cloudflare Pages Functions call onRequestPost for POST.
@@ -83,8 +219,14 @@ export async function onRequestPost(context) {
     return json({ error: "bad_request", message: "Invalid JSON body." }, 400);
   }
 
-  const { provider, mode, messages, question, targetText, stream, useMcp } =
-    body || {};
+  const {
+    provider, mode, messages, question, targetText, stream, useMcp,
+    // Review shaping. `reviewMode` is the 'full' | 'passage' distinction
+    // described under REVIEW_MODES; `passage` and `priorCritique` are only
+    // read when it is 'passage'. Absent means 'full', which is byte-for-byte
+    // the behaviour this endpoint had before passage reviews existed.
+    reviewMode, passage, priorCritique,
+  } = body || {};
 
   // Optional per-request output cap, used by small utility calls such as chat
   // title generation. Clamped: it can only ever LOWER the configured ceiling,
@@ -105,6 +247,22 @@ export async function onRequestPost(context) {
     return json({ error: "bad_request", message: "Unknown mode." }, 400);
   }
 
+  // Validate the review mode. Unset is allowed and means "full".
+  if (reviewMode !== undefined && !REVIEW_MODES.includes(reviewMode)) {
+    return json({ error: "bad_request", message: "Unknown review mode." }, 400);
+  }
+  const review = reviewMode === "passage" ? "passage" : "full";
+
+  // A passage review with nothing highlighted has no subject. Fail loudly
+  // rather than quietly degrading to a full review of an empty string.
+  const passageFields = review === "passage" ? normalizePassage(passage) : null;
+  if (review === "passage" && mode === "critique" && !passageFields.selectionText) {
+    return json(
+      { error: "bad_request", message: "A passage review needs a highlighted passage." },
+      400
+    );
+  }
+
   // The caller's own key, one request at a time. Read it, use it, drop it.
   // There is NO environment-variable fallback — see the note at the top of
   // this file. If the header is absent the client is told which provider
@@ -115,8 +273,12 @@ export async function onRequestPost(context) {
   }
 
   // Build the message list we'll send to the model, depending on the mode.
-  const builtMessages = buildMessages({ mode, messages, question, targetText });
-  const system = SYSTEM_PROMPTS[mode];
+  const builtMessages = buildMessages({
+    mode, messages, question, targetText, review, passage: passageFields,
+  });
+  const system = systemPromptFor({
+    mode, review, question, passage: passageFields, priorCritique,
+  });
 
   // Optional SE Ranking grounding. `mcp.enabled` is false unless the client
   // asked for it AND the deployment is configured for it — when false, not a
@@ -203,7 +365,21 @@ export async function onRequestPost(context) {
 // - rebuttal: pass the conversation history, then append the critique as a new
 //             user turn framed by the rebuttal system prompt.
 // ---------------------------------------------------------------------------
-function buildMessages({ mode, messages, question, targetText }) {
+function buildMessages({ mode, messages, question, targetText, review, passage }) {
+  // A passage critique carries everything — passage, surrounding context, the
+  // user's note, the earlier critique as background — in the system prompt, so
+  // the user turn is a bare instruction. In particular the earlier critique is
+  // NOT here: presenting it as the message being answered is precisely the
+  // confusion this mode exists to remove.
+  if (mode === "critique" && review === "passage") {
+    return [
+      {
+        role: "user",
+        content: "Give your second opinion on the highlighted passage.",
+      },
+    ];
+  }
+
   if (mode === "critique") {
     // targetText is what we're critiquing (a whole reply or a selected excerpt).
     // question is the user's original prompt, included so the critic has context.
@@ -225,6 +401,21 @@ function buildMessages({ mode, messages, question, targetText }) {
   // For rebuttal, the caller has already appended a user turn containing the
   // critique text; the rebuttal system prompt does the framing.
   return Array.isArray(messages) ? messages : [];
+}
+
+// Which system prompt this request gets. The only place review mode changes
+// the framing — and it changes it identically for both providers, because
+// both are handed this one string.
+function systemPromptFor({ mode, review, question, passage, priorCritique }) {
+  if (review === "passage") {
+    if (mode === "critique") {
+      return buildPassageSystemPrompt({ question, passage, priorCritique });
+    }
+    if (mode === "rebuttal") {
+      return SYSTEM_PROMPTS.rebuttalPassage;
+    }
+  }
+  return SYSTEM_PROMPTS[mode];
 }
 
 // ---------------------------------------------------------------------------
