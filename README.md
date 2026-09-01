@@ -35,15 +35,17 @@ One key is enough to chat — second opinions need both.
 
 | Path | What it is |
 |------|-----------|
-| `index.html` | The entire frontend — inline CSS + JS, no build step, no npm. |
-| `functions/api/chat.js` | A Cloudflare Pages Function. Forwards each call to the provider using the key from the request header. Holds no provider keys of its own. |
+| `public/index.html` | The entire frontend — inline CSS + JS, no build step, no npm. `public/` is also the static-asset directory the Worker serves, so it holds **only** what should be public. |
+| `worker/index.js` | The Worker entry point. Dispatches the two API routes by path and falls through to the static assets. |
+| `wrangler.toml` | Worker config: entry point, asset directory. Secrets are **not** declared here. |
+| `functions/api/chat.js` | The `/api/chat` handler. Forwards each call to the provider using the key from the request header. Holds no provider keys of its own. It keeps its Pages-style `context` signature, which is why it still lives under `functions/`. |
 | `assets/` | Provider logo files (see `assets/README.md`). |
 | `README.md` | This file. |
 
 **Where keys live:** in each user's own browser (`localStorage`), never on the server. Every
-request carries the caller's key in an `x-provider-key` header; the Function uses it for that
+request carries the caller's key in an `x-provider-key` header; the Worker uses it for that
 one upstream call and discards it. Nothing is stored, cached, or logged — anything sampled
-into a server log passes through `redact()` first. The Function reads **no** environment
+into a server log passes through `redact()` first. The Worker reads **no** environment
 variables for keys, deliberately: there is no fallback that could spend the operator's credit.
 
 ### Swapping models
@@ -64,7 +66,7 @@ current model IDs against each provider's docs.
 
 ## Run it locally
 
-You need [Wrangler](https://developers.cloudflare.com/workers/wrangler/) (Cloudflare's CLI). It runs the Pages Function locally so `/api/chat` works.
+You need [Wrangler](https://developers.cloudflare.com/workers/wrangler/) (Cloudflare's CLI). It runs the Worker locally so `/api/chat` works.
 
 ### 1. Install Wrangler
 
@@ -77,44 +79,56 @@ npm install -g wrangler
 ### 2. Start the dev server
 
 ```bash
-npx wrangler pages dev .
+npx wrangler dev
 ```
 
-Wrangler prints a local URL (typically `http://localhost:8788`). Open it, click the gear icon,
+`wrangler dev` reads `wrangler.toml`, so it needs no arguments: it serves `public/` as
+static assets and routes `/api/chat` to the Worker.
+
+Wrangler prints a local URL (typically `http://localhost:8787`). Open it, click the gear icon,
 and paste your own key(s) — exactly as any other visitor would. No `.dev.vars` file is needed:
-the Function ignores environment variables entirely.
+the Worker ignores environment variables entirely.
 
 If you have an old `.dev.vars` from a previous version, it is now unused. Delete it.
 
 ---
 
-## Deploy to Cloudflare Pages
+## Deploy to Cloudflare
 
-### Option A — via the dashboard (Git-connected)
+This deploys as a **Worker**, not a Pages project. Cloudflare now creates Workers by
+default, and Workers do not use the Pages `functions/` file-based routing convention —
+`worker/index.js` wires up the two API routes explicitly and hands everything else to the
+static-asset binding. See the comments at the top of `wrangler.toml`.
 
-1. Push this project to a GitHub/GitLab repo.
-2. In the Cloudflare dashboard: **Workers & Pages → Create → Pages → Connect to Git**.
-3. Pick the repo. Build settings:
-   - **Build command:** _(leave empty — there is no build step)_
-   - **Build output directory:** `/`
-4. Deploy.
-
-### Option B — direct upload with Wrangler
+### Option A — direct deploy with Wrangler
 
 ```bash
-npx wrangler pages deploy .
+npx wrangler deploy
 ```
+
+Everything it needs is already in `wrangler.toml`: the entry point (`worker/index.js`) and
+the static-asset directory (`public/`). There is no build step and no arguments to pass.
+
+If the command fails asking for `CLOUDFLARE_API_TOKEN`, your saved login has expired —
+run `npx wrangler login` first.
+
+### Option B — Git-connected (build on push)
+
+Push the repo to GitHub/GitLab and connect it to the Worker from the Cloudflare
+dashboard, under **Workers & Pages**. Leave the build command empty; `wrangler.toml`
+supplies the rest.
 
 ### ⚠️ Before deploying publicly: delete the API key environment variables
 
 Earlier versions of this app read `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from the Cloudflare
 environment. **That is gone, and the variables must be deleted.**
 
-1. Cloudflare dashboard → **Workers & Pages → your project → Settings → Environment variables**.
-2. Delete `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from **Production** *and* **Preview**.
+1. Cloudflare dashboard → **Workers & Pages → your Worker → Settings**, under the
+   variables/secrets section.
+2. Delete `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` wherever they appear.
 3. Redeploy.
 
-The current Function never reads them, so leaving them in place would not actually let
+The current Worker never reads them, so leaving them in place would not actually let
 strangers spend your credit — but a stale secret sitting in a public project's settings is
 a liability with no upside. Remove them. And if those keys were ever live on a public
 deployment, revoke and reissue them in the provider dashboards.
@@ -184,7 +198,7 @@ proxy:
 
 `SERANKING_API_KEY` lives in the Cloudflare environment and is used only inside the
 provider request bodies. It is never sent to the browser, never logged, and never
-part of any response the Function returns. There is no SE Ranking field in Settings,
+part of any response the Worker returns. There is no SE Ranking field in Settings,
 because the browser never sees that key.
 
 **Use a restricted, read-only SE Ranking API key.** SE Ranking supports read-only
@@ -224,7 +238,7 @@ deployment **must** sit behind Cloudflare Access, restricted to SE Ranking compa
 accounts.
 
 1. Cloudflare dashboard → **Zero Trust → Access → Applications → Add an application**.
-2. Type **Self-hosted**, pointed at this Pages deployment's domain.
+2. Type **Self-hosted**, pointed at this Worker's domain.
 3. Add a policy: **Allow**, with an *Emails ending in* rule for your company domain
    (or an identity-provider group). Do not leave a bypass policy in place.
 4. Save, then confirm an incognito window is challenged before the page loads.
@@ -250,7 +264,7 @@ default: **without Access, anyone who finds the URL can use the app and spend SE
 Ranking credits on your key** (they bring their own provider key, but not yours).
 Delete the variable the moment Access is in place.
 
-As defence in depth the chat Function also rejects MCP-enabled requests that arrive
+As defence in depth the chat handler also rejects MCP-enabled requests that arrive
 without Cloudflare Access's `Cf-Access-Jwt-Assertion` header — so if Access is ever
 removed or misconfigured, the toggle stops working rather than quietly leaking the
 key's capabilities. `localhost` is exempt so local development still works. The
@@ -264,9 +278,9 @@ Three variables, all **encrypted** (Secret) in production:
 |---|---|---|
 | `SERANKING_API_KEY` | Both providers | Restricted, read-only SE Ranking key |
 | `MCP_PROXY_SECRET` | Claude only | Any random string; rotate freely |
-| `MCP_PROXY_URL` | Claude, optional | Absolute URL of the deployed proxy — e.g. `https://se-ai-sparring.pages.dev/api/mcp/seranking` (**replace with your actual Pages host**). Usually best left **unset**: it then falls back to the request's own origin, so the proxy follows whatever host the project deploys to and preview deployments work unconfigured. Set it only if the proxy must live on a different host from the app. |
+| `MCP_PROXY_URL` | Claude, optional | Absolute URL of the deployed proxy — e.g. `https://se-ai-sparring.<your-subdomain>.workers.dev/api/mcp/seranking` (**replace with your actual Worker host**). Usually best left **unset**: it then falls back to the request's own origin, so the proxy follows whatever host the project deploys to and preview deployments work unconfigured. Set it only if the proxy must live on a different host from the app. |
 
-**Production** — Cloudflare dashboard → **Workers & Pages → your project → Settings
+**Production** — Cloudflare dashboard → **Workers & Pages → your Worker → Settings
 → Environment variables**, then redeploy.
 
 **Local development** — add them to `.dev.vars`:
