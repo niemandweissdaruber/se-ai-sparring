@@ -1340,14 +1340,19 @@
       font-weight: 700;
       font-size: 14.5px;
       color: #0e0f13;
-      background: var(--primary-accent);
+      /* Same primary-model fill as the composer Send and "Send back" — this
+         is an action button, so it takes the action colour (#D97757 while
+         Claude is primary), not the lighter --primary-accent used for
+         borders and glows. Flipping the primary model moves all three
+         together; see the role-swap block in applyRoleStyling(). */
+      background: var(--primary-action);
       border: none;
       padding: 12px 22px;
       border-radius: var(--radius-sm);
       cursor: pointer;
-      transition: filter 0.2s ease, transform 0.1s ease;
+      transition: background 0.2s ease, transform 0.1s ease;
     }
-    .welcome-cta:hover { filter: brightness(1.08); }
+    .welcome-cta:hover { background: var(--primary-action-hover); }
     .welcome-cta:active { transform: translateY(1px); }
 
     /* A disabled action explains itself through its tooltip. */
