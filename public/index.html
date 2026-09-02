@@ -598,6 +598,153 @@
       border-color: var(--primary-accent);
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-accent) 18%, transparent);
     }
+    /* ---- Attachments ------------------------------------------------- */
+    /* The chip row sits above the input, inside the composer, so it shares
+       the input's max-width and never widens the column. */
+    .attach-row {
+      display: none;
+      flex-wrap: wrap;
+      gap: 8px;
+      max-width: 820px;
+      margin: 0 auto 10px;
+    }
+    .attach-row.show { display: flex; }
+
+    .chip-att {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      max-width: 290px;
+      padding: 7px 9px;
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 12.5px;
+      color: var(--text-dim);
+      animation: fadein 0.2s ease both;
+    }
+    .chip-att .thumb {
+      flex: none;
+      width: 30px;
+      height: 30px;
+      border-radius: 6px;
+      object-fit: cover;
+      background: var(--bg-0);
+      display: block;
+    }
+    .chip-att .doc-icon {
+      flex: none;
+      width: 30px;
+      height: 30px;
+      border-radius: 6px;
+      background: var(--bg-0);
+      border: 1px solid var(--border-soft);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-faint);
+    }
+    .chip-att .chip-meta {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .chip-att .chip-name {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+    }
+    .chip-att .chip-sub {
+      display: block;
+      font-size: 11px;
+      color: var(--text-faint);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chip-att .drop {
+      flex: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: none;
+      background: none;
+      color: var(--text-faint);
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .chip-att .drop:hover { background: var(--bg-2); color: var(--text); }
+
+    /* Normalizing is async (an image is decoded, redrawn and re-encoded), so
+       the chip appears immediately and shows that it is still working. */
+    .chip-att.working { opacity: 0.75; }
+    .chip-att .spinner {
+      flex: none;
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--primary-accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .chip-att.failed {
+      border-color: color-mix(in srgb, #e5534b 55%, var(--border));
+    }
+    .chip-att.failed .sub { color: #e5807a; }
+
+    /* Restored from storage: the bytes were deliberately never saved. */
+    .chip-att.ghost {
+      opacity: 0.55;
+      font-style: italic;
+      border-style: dashed;
+    }
+
+    /* Attachments already sent, shown above the user's own bubble. */
+    .msg .sent-attachments {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-bottom: 7px;
+    }
+    .msg .sent-attachments .chip-att { max-width: 240px; }
+
+    .attach-note {
+      max-width: 820px;
+      margin: 8px auto 0;
+      font-size: 11.5px;
+      color: var(--text-faint);
+    }
+
+    button.attach-btn {
+      flex: none;
+      height: 52px;
+      width: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font: inherit;
+      color: var(--text-faint);
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: color 0.2s ease, border-color 0.2s ease;
+    }
+    button.attach-btn:hover { color: var(--text); border-color: var(--text-faint); }
+    button.attach-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* Drag feedback on the composer as a whole. */
+    .composer.dropping { background: color-mix(in srgb, var(--primary-accent) 7%, transparent); }
+    .composer.dropping textarea#input { border-color: var(--primary-accent); }
+
     button.send {
       flex: none;
       height: 52px;
@@ -1993,15 +2140,39 @@
         </div>
 
         <!-- Composer -->
-        <div class="composer">
+        <div class="composer" id="composer">
+          <!-- Attachments staged for the next message. Session memory only —
+               nothing here is ever written to storage. -->
+          <div class="attach-row" id="attach-row"></div>
+
           <div class="row">
+            <button class="attach-btn" id="attach-btn" type="button"
+                    onclick="openFilePicker()"
+                    title="Attach images or PDFs"
+                    aria-label="Attach images or PDFs">
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none"
+                   stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                   stroke-linejoin="round" aria-hidden="true">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+            </button>
             <textarea id="input" rows="1"
               placeholder="Ask Claude anything…"
               oninput="autogrow(this)"
+              onpaste="onComposerPaste(event)"
               onkeydown="onKey(event)"></textarea>
             <!-- Doubles as Stop while a reply is streaming. -->
             <button class="send" id="send" onclick="onSendClick()">Send</button>
           </div>
+
+          <!-- Hidden: the paperclip drives it. -->
+          <input type="file" id="file-input" multiple
+                 accept="image/*,application/pdf"
+                 style="display:none"
+                 onchange="onFilePicked(event)">
+
+          <!-- Only rendered when something is staged. -->
+          <p class="attach-note" id="attach-note" hidden></p>
 
           <div class="composer-foot">
             <!-- Running estimate for this conversation, critiques and
@@ -2273,6 +2444,7 @@
       userNote: "",           // passage mode: the reader's optional question
       priorCritique: "",      // the reviewer's own last full critique, if any
       targetId: null,         // id of the message record the passage lives in
+      attachments: null,      // files the reviewer should see (session only)
     };
   }
 
@@ -2651,6 +2823,10 @@
     const body = document.createElement("div");
     body.className = "body";
     body.appendChild(meta);
+    // Files this turn carried, above the text. After a reload the bytes are
+    // gone by design, so a grey placeholder stands in for each one.
+    const sent = buildSentAttachments(rec);
+    if (sent) body.appendChild(sent);
     // SE Ranking calls this reply made, above the text. Absent when none.
     const chips = buildToolChips(rec.tools);
     if (chips) body.appendChild(chips);
@@ -2732,6 +2908,14 @@
       // Passage reviews that were sent back, rendered inline against the
       // passage they concern rather than as their own messages.
       annotations: null,
+      // Session-only. `attachments` are the files a user turn carried;
+      // `sourceAttachments` are the wire copies an assistant reply was
+      // written against. Neither is ever persisted — see saveCurrent().
+      attachments: null,
+      sourceAttachments: null,
+      // What DOES survive a reload: how many files this turn had, so the
+      // placeholder chips can say so.
+      attachmentCount: 0,
       ...rec,
     };
     messages.push(record);
@@ -3084,7 +3268,25 @@
   async function sendMessage() {
     const input = $("input");
     const text = input.value.trim();
-    if (!text) return;
+
+    // Still decoding: the Send button is disabled for this, so reaching here
+    // means a keyboard shortcut. The chip's spinner is already saying why.
+    if (attachmentsBusy()) return;
+
+    // Checked before the empty-text case: a rejected file is the more
+    // actionable of the two problems.
+    if (attachmentsFailed()) {
+      showAttachError("Remove the attachment that didn't load, then send.");
+      return;
+    }
+
+    if (!text) {
+      // Silently doing nothing is baffling when a file is sitting right there.
+      if (pendingAttachments.length) {
+        showAttachError("Add a message to go with the attachment.");
+      }
+      return;
+    }
 
     // No key for the model that would answer: open Settings rather than
     // sending a request that can only fail.
@@ -3098,10 +3300,24 @@
     input.value = "";
     autogrow(input);
 
+    // Snapshot the staged attachments and hand them to this turn. The UI
+    // objects (thumbnail URL, size) stay on the message record for its chips;
+    // the wire form is what travels with the request.
+    const staged = pendingAttachments.slice();
+    const wire = wireAttachments(staged);
+    clearAttachments();
+
     // Show + record the user's message.
-    addMessage({ role: "user", text: text });
+    addMessage({ role: "user", text: text, attachments: staged });
     scrollDownForce();                   // a message you just sent: always jump
-    history.push({ role: "user", content: text });
+    // `attachments` rides on the history turn so every LATER request — the
+    // rebuttal especially — still shows the model what it was looking at.
+    // saveCurrent() strips it: base64 must never reach localStorage.
+    history.push({
+      role: "user",
+      content: text,
+      ...(wire ? { attachments: wire } : {}),
+    });
     // Saved BEFORE the reply is requested, on purpose: a refresh (or a crash)
     // during the reply must never lose what you typed.
     saveCurrent();
@@ -3126,12 +3342,17 @@
     // A rebuttal inherits the mode of the review it answers (opts.reviewMode);
     // an ordinary turn is neither kind of review.
     const reviewMode = opts.reviewMode === "passage" ? "passage" : "full";
+    // Whatever files the most recent user turn carried. Pinned onto the reply
+    // so that reviewing THIS answer later still finds them, however many
+    // turns have gone by.
+    const sourceAttachments = latestTurnAttachments();
     const rec = addMessage({
       role: "assistant",
       text: "",
       model,
       kind,
       reviewMode,
+      sourceAttachments,
       streaming: true,
     });
     scrollDownForce();
@@ -3168,6 +3389,7 @@
         model,
         kind,
         reviewMode,
+        sourceAttachments,
         truncated: !!data.truncated,
         usage: fallbackUsage,
         apiModel: data.model || null,
@@ -3326,6 +3548,499 @@
     scrollDown();
   }
 
+  // =====================================================================
+  //  ATTACHMENTS — images and PDFs, session memory only
+  //
+  //  An attachment exists for as long as the tab does and no longer. The
+  //  base64 NEVER reaches localStorage: a couple of screenshots would blow
+  //  through the ~5MB origin quota, and a QuotaExceededError there doesn't
+  //  just lose the image — writeStore() fails and takes the whole chat
+  //  history with it. So the bytes live in memory, the reload path shows a
+  //  grey "attachment (not saved)" placeholder, and saveCurrent() persists
+  //  nothing but a count.
+  //
+  //  Normalized shape, which is exactly what the server expects:
+  //    { id, kind: "image" | "pdf", name, mediaType, base64 }
+  //  plus UI-only fields (status, size, previewUrl) that are stripped before
+  //  the request is built.
+  // =====================================================================
+
+  const ATTACH_MAX = 3;                       // per message
+  const ATTACH_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  const ATTACH_PDF_TYPE = "application/pdf";
+  // Anthropic resizes anything larger anyway, so sending more than this is
+  // paying to upload pixels the model will throw away.
+  const ATTACH_MAX_EDGE = 1568;
+  const ATTACH_JPEG_QUALITY = 0.85;
+  const ATTACH_IMAGE_BASE64_MAX = 5 * 1024 * 1024;      // API limit, per image
+  const ATTACH_PDF_BYTES_MAX = 20 * 1024 * 1024;        // raw file
+  const ATTACH_TOTAL_BASE64_MAX = Math.ceil((20 * 1024 * 1024 * 4) / 3);
+
+  // Staged for the next message. Never persisted.
+  let pendingAttachments = [];
+  let attachSeq = 0;
+
+  // --- Intake ---------------------------------------------------------
+  function openFilePicker() { $("file-input").click(); }
+
+  function onFilePicked(e) {
+    addFiles(e.target.files);
+    e.target.value = "";      // so picking the same file twice still fires
+  }
+
+  // Paste: the clipboard carries a screenshot as a file item alongside the
+  // text flavours, so keep only the file entries and let everything else
+  // fall through to the normal paste.
+  function onComposerPaste(e) {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const files = [];
+    for (const item of items) {
+      if (item.kind !== "file") continue;
+      if (!isAttachableType(item.type)) continue;
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+    if (!files.length) return;      // plain text paste: don't interfere
+    e.preventDefault();
+    addFiles(files);
+  }
+
+  function isAttachableType(type) {
+    return (type || "").startsWith("image/") || type === ATTACH_PDF_TYPE;
+  }
+
+  // Drag and drop onto the composer. dragover must preventDefault or the
+  // browser navigates to the file instead of firing drop.
+  (function wireComposerDrop() {
+    const composer = $("composer");
+    const show = (on) => composer.classList.toggle("dropping", on);
+    composer.addEventListener("dragover", (e) => { e.preventDefault(); show(true); });
+    composer.addEventListener("dragleave", (e) => {
+      if (!composer.contains(e.relatedTarget)) show(false);
+    });
+    composer.addEventListener("drop", (e) => {
+      e.preventDefault();
+      show(false);
+      if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
+    });
+  })();
+
+  // Stage a batch. Each file gets a chip immediately — normalizing an image
+  // means decoding and re-encoding it, which is slow enough to see — and the
+  // chip fills in or turns into an error in place.
+  function addFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    hideBanner();
+
+    for (const file of files) {
+      if (pendingAttachments.length >= ATTACH_MAX) {
+        showAttachError(`Up to ${ATTACH_MAX} attachments per message.`);
+        break;
+      }
+      const att = {
+        id: ++attachSeq,
+        name: file.name || "pasted image",
+        size: file.size,
+        kind: file.type === ATTACH_PDF_TYPE ? "pdf" : "image",
+        mediaType: file.type,
+        base64: "",
+        previewUrl: "",
+        status: "working",
+        error: "",
+      };
+      pendingAttachments.push(att);
+      renderAttachments();
+      // Deliberately not awaited: several files normalize in parallel and
+      // each chip settles on its own.
+      normalizeAttachment(att, file);
+    }
+  }
+
+  async function normalizeAttachment(att, file) {
+    try {
+      if (file.type === ATTACH_PDF_TYPE) {
+        await normalizePdf(att, file);
+      } else if (ATTACH_IMAGE_TYPES.includes(file.type)) {
+        await normalizeImage(att, file);
+      } else {
+        throw new Error("Images and PDFs only.");
+      }
+      // Checked after normalizing, because the whole point of downscaling is
+      // to bring a large screenshot under the ceiling.
+      if (totalStagedBase64() > ATTACH_TOTAL_BASE64_MAX) {
+        throw new Error("Too large together — about 20MB per message.");
+      }
+      att.status = "ready";
+    } catch (err) {
+      att.status = "error";
+      att.error = (err && err.message) || "Couldn't read that file.";
+    }
+    renderAttachments();
+  }
+
+  // PDFs are passed through untouched: the model reads the file itself, and
+  // anything we did to it here would only risk corrupting it. Page count is
+  // deliberately NOT computed — that means parsing the PDF, and the server
+  // already turns Anthropic's page-limit rejection into a readable sentence.
+  async function normalizePdf(att, file) {
+    if (file.size > ATTACH_PDF_BYTES_MAX) {
+      throw new Error("PDF too large — the limit is 20MB.");
+    }
+    att.mediaType = ATTACH_PDF_TYPE;
+    att.base64 = await fileToBase64(file);
+  }
+
+  // Images are decoded, downscaled to the model's own working resolution and
+  // re-encoded. JPEG unless the image actually uses transparency, in which
+  // case flattening it onto a canvas would put black behind the subject.
+  async function normalizeImage(att, file) {
+    const bitmap = await decodeImage(file);
+    const scale = Math.min(1, ATTACH_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    if (bitmap.close) bitmap.close();
+
+    const keepPng = file.type !== "image/jpeg" && canvasHasAlpha(ctx, w, h);
+    const mediaType = keepPng ? "image/png" : "image/jpeg";
+    const blob = await canvasToBlob(canvas, mediaType, ATTACH_JPEG_QUALITY);
+    const base64 = await fileToBase64(blob);
+
+    if (base64.length > ATTACH_IMAGE_BASE64_MAX) {
+      throw new Error("Image too large even after downscaling.");
+    }
+
+    att.mediaType = mediaType;
+    att.base64 = base64;
+    att.previewUrl = URL.createObjectURL(blob);
+  }
+
+  // createImageBitmap handles orientation and is faster, but isn't everywhere;
+  // the <img> path is the fallback.
+  async function decodeImage(file) {
+    if (window.createImageBitmap) {
+      try { return await createImageBitmap(file); } catch { /* fall through */ }
+    }
+    const url = URL.createObjectURL(file);
+    try {
+      return await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("That image couldn't be read."));
+        img.src = url;
+      });
+    } finally {
+      // Revoked on the next tick so the decode has finished with it.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+  }
+
+  // Any pixel that isn't fully opaque means re-encoding as JPEG would change
+  // what the image looks like. Sampled rather than exhaustive: a full scan of
+  // a 1568x1568 image is ~10M reads for a yes/no answer.
+  function canvasHasAlpha(ctx, w, h) {
+    try {
+      const step = Math.max(1, Math.floor(Math.min(w, h) / 64));
+      for (let y = 0; y < h; y += step) {
+        const row = ctx.getImageData(0, y, w, 1).data;
+        for (let x = 3; x < row.length; x += 4 * step) {
+          if (row[x] < 255) return true;
+        }
+      }
+      return false;
+    } catch {
+      // A tainted canvas can't be read. Keep PNG: lossless is the safe guess.
+      return true;
+    }
+  }
+
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error("Couldn't encode that image."))),
+        type,
+        quality
+      );
+    });
+  }
+
+  // Base64 WITHOUT the data: prefix — that is what both APIs want in the
+  // data field, and the client adds the prefix itself for OpenAI.
+  function fileToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || "");
+        const comma = result.indexOf(",");
+        resolve(comma === -1 ? result : result.slice(comma + 1));
+      };
+      reader.onerror = () => reject(new Error("Couldn't read that file."));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function totalStagedBase64() {
+    return pendingAttachments.reduce((n, a) => n + (a.base64 ? a.base64.length : 0), 0);
+  }
+
+  function removeAttachment(id) {
+    const att = pendingAttachments.find((a) => a.id === id);
+    if (att && att.previewUrl) URL.revokeObjectURL(att.previewUrl);
+    pendingAttachments = pendingAttachments.filter((a) => a.id !== id);
+    renderAttachments();
+  }
+
+  function clearAttachments() {
+    // Preview URLs are kept alive: the chips above the sent message still
+    // point at them for as long as this tab lives.
+    pendingAttachments = [];
+    renderAttachments();
+  }
+
+  function showAttachError(message) {
+    handleError({ message }, primary);
+  }
+
+  // --- Chips ----------------------------------------------------------
+  const ICON_DOC =
+    '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"' +
+    ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>' +
+    '<path d="M14 2v6h6"/></svg>';
+
+  function formatBytes(n) {
+    if (!n || n < 1024) return (n || 0) + " B";
+    if (n < 1024 * 1024) return Math.round(n / 1024) + " KB";
+    return (n / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  // PDFs are the expensive attachment: roughly 1,500–3,000 tokens per page,
+  // and this app sends every attachment to BOTH models plus the reviewer, so
+  // the real bill is around three times what one page costs.
+  //
+  // The page count is a guess from the file size, because counting properly
+  // means parsing the PDF in the browser. It is shown as a wide range and
+  // labelled rough for exactly that reason — it is there to stop someone
+  // casually attaching a 200-page report, not to price the call.
+  const PDF_BYTES_PER_PAGE = 50 * 1024;
+  const PDF_TOKENS_PER_PAGE = [1500, 3000];
+
+  // Short enough to sit on one line next to a filename. formatTokens() spells
+  // out "22,500", which wraps the chip and squeezes the name to nothing.
+  function compactTokens(n) {
+    if (n < 1000) return String(n);
+    if (n < 10000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return Math.round(n / 1000) + "k";
+  }
+
+  function pdfTokenEstimate(bytes) {
+    const pages = Math.max(1, Math.round(bytes / PDF_BYTES_PER_PAGE));
+    const lo = pages * PDF_TOKENS_PER_PAGE[0];
+    const hi = pages * PDF_TOKENS_PER_PAGE[1];
+    return {
+      pages,
+      label: `≈${compactTokens(lo)}–${compactTokens(hi)} tok`,
+      title:
+        `Rough estimate from the file size (~${pages} page${pages === 1 ? "" : "s"}), ` +
+        "not a page count. Every attachment is sent to both models, and again " +
+        "to the reviewer for a second opinion — so budget roughly three times this.",
+    };
+  }
+
+  // One chip. `opts.readonly` drops the remove button (chips shown above an
+  // already-sent message).
+  function buildAttachChip(att, opts = {}) {
+    const chip = document.createElement("div");
+    chip.className = "chip-att" +
+      (att.status === "working" ? " working" : "") +
+      (att.status === "error" ? " failed" : "") +
+      (att.ghost ? " ghost" : "");
+
+    if (att.ghost) {
+      const icon = document.createElement("span");
+      icon.className = "doc-icon";
+      icon.innerHTML = ICON_DOC;
+        const meta = document.createElement("span");
+      meta.className = "chip-meta";
+      const name = document.createElement("span");
+      name.className = "chip-name";
+      name.textContent = "attachment (not saved)";
+      meta.appendChild(name);
+      chip.appendChild(icon);
+      chip.appendChild(meta);
+      chip.title =
+        "Attachments are kept in memory for the session only — they are never " +
+        "written to storage, so reloading the page lets them go.";
+      return chip;
+    }
+
+    if (att.kind === "image" && att.previewUrl) {
+      const img = document.createElement("img");
+      img.className = "thumb";
+      img.src = att.previewUrl;
+      img.alt = "";
+      chip.appendChild(img);
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "doc-icon";
+      icon.innerHTML = att.kind === "pdf" ? ICON_DOC : "";
+      chip.appendChild(icon);
+    }
+
+    const meta = document.createElement("span");
+    meta.className = "chip-meta";
+    const name = document.createElement("span");
+    name.className = "chip-name";
+    name.textContent = att.name;
+    name.title = att.name;
+    meta.appendChild(name);
+
+    const sub = document.createElement("span");
+    sub.className = "chip-sub";
+    if (att.status === "working") {
+      sub.textContent = "preparing…";
+    } else if (att.status === "error") {
+      sub.textContent = att.error;
+    } else if (att.kind === "pdf") {
+      const est = pdfTokenEstimate(att.size);
+      sub.textContent = `${formatBytes(att.size)} · ${est.label}`;
+      sub.title = est.title;
+    } else {
+      sub.textContent = formatBytes(approxBytesFromBase64(att.base64));
+    }
+    meta.appendChild(sub);
+    chip.appendChild(meta);
+
+    if (att.status === "working") {
+      const spin = document.createElement("span");
+      spin.className = "spinner";
+      chip.appendChild(spin);
+    }
+
+    if (!opts.readonly) {
+      const drop = document.createElement("button");
+      drop.type = "button";
+      drop.className = "drop";
+      drop.innerHTML = "&times;";
+      drop.title = "Remove";
+      drop.setAttribute("aria-label", "Remove " + att.name);
+      drop.onclick = () => removeAttachment(att.id);
+      chip.appendChild(drop);
+    }
+
+    return chip;
+  }
+
+  function approxBytesFromBase64(b64) {
+    return b64 ? Math.round((b64.length * 3) / 4) : 0;
+  }
+
+  function renderAttachments() {
+    const row = $("attach-row");
+    row.innerHTML = "";
+    pendingAttachments.forEach((att) => row.appendChild(buildAttachChip(att)));
+    row.classList.toggle("show", pendingAttachments.length > 0);
+
+    const note = $("attach-note");
+    if (pendingAttachments.length) {
+      note.hidden = false;
+      note.textContent =
+        "Attachments are sent to both models — and again to the reviewer for a " +
+        "second opinion. Kept for this session only; they aren't saved.";
+    } else {
+      note.hidden = true;
+    }
+
+    $("attach-btn").disabled = pendingAttachments.length >= ATTACH_MAX;
+    applySendButton();
+  }
+
+  // What actually goes on the wire: the normalized fields and nothing else.
+  // UI state (status, previewUrl, size) stays here.
+  function wireAttachments(list) {
+    if (!Array.isArray(list) || !list.length) return null;
+    return list.map((a) => ({
+      id: String(a.id),
+      kind: a.kind,
+      name: a.name,
+      mediaType: a.mediaType,
+      base64: a.base64,
+    }));
+  }
+
+  // Two different states, deliberately kept apart:
+  //   busy   — still decoding. Sending now would drop the file, so the button
+  //            is disabled and there is nothing useful to say beyond the
+  //            spinner already on the chip.
+  //   failed — the file was rejected. The button stays LIVE so that pressing
+  //            it produces an explanation; a dead button with no reason is
+  //            the worst of both.
+  function attachmentsBusy() {
+    return pendingAttachments.some((a) => a.status === "working");
+  }
+  function attachmentsFailed() {
+    return pendingAttachments.some((a) => a.status === "error");
+  }
+
+  // The chip row shown above a message that was sent with attachments.
+  // Returns null when there is nothing to show.
+  function buildSentAttachments(rec) {
+    const live = Array.isArray(rec.attachments) ? rec.attachments : [];
+    const ghosts = live.length ? 0 : Math.max(0, Number(rec.attachmentCount) || 0);
+    if (!live.length && !ghosts) return null;
+
+    const row = document.createElement("div");
+    row.className = "sent-attachments";
+    if (live.length) {
+      live.forEach((att) => row.appendChild(buildAttachChip(att, { readonly: true })));
+    } else {
+      for (let i = 0; i < ghosts; i++) {
+        row.appendChild(buildAttachChip({ ghost: true }, { readonly: true }));
+      }
+    }
+    return row;
+  }
+
+  // The wire attachments on the most recent user turn, or null. Read from
+  // `history` because that is the view that carries them across a turn.
+  function latestTurnAttachments() {
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role !== "user") continue;
+      const list = history[i].attachments;
+      return Array.isArray(list) && list.length ? list : null;
+    }
+    return null;
+  }
+
+  // Does a highlighted passage actually talk about an attached file? A
+  // passage review is meant to be narrow and cheap, and a PDF costs thousands
+  // of tokens, so the files only tag along when the passage refers to them —
+  // by filename, or by the words people use for attachments.
+  const ATTACHMENT_WORDS =
+    /\b(image|images|screenshot|screenshots|photo|photos|picture|pictures|figure|diagram|chart|graph|scan|pdf|document|doc|file|attachment|attached|page \d+|shown|above|depicted)\b/i;
+
+  function passageRefersToAttachment(text, attachments) {
+    if (!attachments || !attachments.length) return false;
+    const hay = (text || "").toLowerCase();
+    if (!hay) return false;
+    for (const att of attachments) {
+      const name = (att.name || "").toLowerCase();
+      if (name && hay.includes(name)) return true;
+      // Also match the bare stem, so "the q3-report figures" catches
+      // q3-report.pdf.
+      const stem = name.replace(/\.[a-z0-9]+$/, "");
+      if (stem.length >= 4 && hay.includes(stem)) return true;
+    }
+    return ATTACHMENT_WORDS.test(text);
+  }
+
   // --- Critique (whole message OR a selection) -----------------------
   // The user's most recent question gives the critic context.
   //
@@ -3355,6 +4070,10 @@
       targetText: rec.text,
       sourceQuestion: lastUserQuestion(),
       targetId: rec.id,
+      // The reviewer looks at the same files the answer was written against.
+      // Reviewing a description of a screenshot instead of the screenshot is
+      // how a reviewer ends up inventing faults.
+      attachments: rec.sourceAttachments || null,
     });
   }
 
@@ -3598,6 +4317,9 @@
       provider: MODELS[criticModel].provider,
       mode: "critique",
       question: review.sourceQuestion,
+      ...(review.attachments && review.attachments.length
+        ? { attachments: review.attachments }
+        : {}),
     };
     if (review.mode !== "passage") {
       return { ...base, targetText: review.targetText };
@@ -3942,6 +4664,14 @@
       // ONLY as labelled background (see the server) — never as the message
       // being answered, which is the whole point of passage mode.
       priorCritique: lastFullCritiqueText(),
+      // A passage review is deliberately narrow. Re-sending a PDF for a
+      // sentence that has nothing to do with it costs thousands of tokens for
+      // nothing, so the files come along only when the passage talks about
+      // them. A full review always gets them.
+      attachments:
+        owner && passageRefersToAttachment(text, owner.sourceAttachments)
+          ? owner.sourceAttachments
+          : null,
     };
 
     // Position the button just above the selection.
@@ -5532,7 +6262,12 @@
     } else {
       btn.classList.remove("stop");
       btn.textContent = "Send";
-      btn.disabled = busyState;
+      // Also blocked while an attachment is still being decoded — sending
+      // then would drop the file silently. A FAILED attachment deliberately
+      // does not disable it; see attachmentsBusy() / attachmentsFailed().
+      const preparing = attachmentsBusy();
+      btn.disabled = busyState || preparing;
+      btn.title = preparing ? "Waiting for the attachment to finish preparing…" : "";
     }
   }
 
@@ -5739,6 +6474,7 @@
           // Kept raw here: normalizeAnnotations() mints DOM ids, which only
           // makes sense when the conversation is actually rendered.
           annotations: Array.isArray(m.annotations) ? m.annotations : null,
+          attachmentCount: Math.max(0, Number(m.attachmentCount) || 0),
         })),
       history: c.history
         .filter((h) => h && typeof h.content === "string" &&
@@ -5836,6 +6572,13 @@
       tools: Array.isArray(m.tools) && m.tools.length ? m.tools : null,
       reviewMode: m.reviewMode === "passage" ? "passage" : "full",
       annotations: serializeAnnotations(m.annotations),
+      // The COUNT only. Writing base64 here would blow the ~5MB origin quota
+      // on a couple of screenshots, and a QuotaExceededError in writeStore()
+      // loses the entire chat history, not just the image. The count is what
+      // lets the reload path show "attachment (not saved)" in its place.
+      attachmentCount:
+        (Array.isArray(m.attachments) && m.attachments.length) ||
+        Number(m.attachmentCount) || 0,
     }));
 
     // `history` doesn't contain a streaming reply yet — it's pushed when the
@@ -5990,6 +6733,7 @@
     lastCritique = emptyCritique();
     // New chat, new subtotal. The all-time totals are untouched.
     convSpend = newSpendBucket();
+    clearAttachments();
     renderChatCost();
     resetMessagesEmptyState();
     $("panel-body").innerHTML = "";
@@ -6027,6 +6771,7 @@
     msgSeq = 0;
     $("messages").innerHTML = "";
     lastCritique = emptyCritique();
+    clearAttachments();
     $("panel-body").innerHTML = "";
     closePanel();
     hideBanner();
@@ -6048,6 +6793,9 @@
         tools: m.tools,
         reviewMode: m.reviewMode,
         annotations: normalizeAnnotations(m.annotations),
+        // The bytes were never saved, by design. The count drives the grey
+        // placeholder chips.
+        attachmentCount: m.attachmentCount,
       })
     );
     renderChatCost();

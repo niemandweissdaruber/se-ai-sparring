@@ -204,6 +204,193 @@ function buildPassageSystemPrompt({ question, passage, priorCritique }) {
   return parts.join("\n\n");
 }
 
+// --- ATTACHMENTS ----------------------------------------------------------
+// Images and PDFs ride along with a user turn as
+//   { id, kind: "image" | "pdf", name, mediaType, base64 }
+// which is exactly what the client produces. Nothing is stored here and
+// nothing is written anywhere — the bytes exist for the length of one
+// upstream call, the same contract the API key has.
+//
+// The client already enforces these limits, but it is a browser and therefore
+// not to be trusted: everything is re-checked here. A request that violates a
+// limit is refused rather than trimmed, so the caller never silently gets a
+// different question answered than the one it asked.
+const ATTACHMENT_LIMITS = {
+  perMessage: 3,
+  // Anthropic's per-image ceiling is 5MB of base64. PDFs are capped at 32MB
+  // by the API; we stop at 20MB of raw file, which is ~26.7MB of base64.
+  imageBase64: 5 * 1024 * 1024,
+  pdfBase64: Math.ceil((20 * 1024 * 1024 * 4) / 3),
+  // Whole-request ceiling, base64 bytes across every attachment on every turn.
+  totalBase64: Math.ceil((20 * 1024 * 1024 * 4) / 3),
+};
+
+const IMAGE_MEDIA_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const PDF_MEDIA_TYPE = "application/pdf";
+
+// Validate one attachment. Returns an error STRING (client-safe) or null.
+function attachmentError(att) {
+  if (!att || typeof att !== "object") return "Malformed attachment.";
+  if (typeof att.base64 !== "string" || !att.base64) return "Attachment has no data.";
+
+  if (att.kind === "image") {
+    if (!IMAGE_MEDIA_TYPES.includes(att.mediaType)) {
+      return "Unsupported image type — PNG, JPEG, GIF and WebP only.";
+    }
+    if (att.base64.length > ATTACHMENT_LIMITS.imageBase64) {
+      return "That image is too large — images must be under 5MB once encoded.";
+    }
+    return null;
+  }
+
+  if (att.kind === "pdf") {
+    if (att.mediaType !== PDF_MEDIA_TYPE) return "Malformed PDF attachment.";
+    if (att.base64.length > ATTACHMENT_LIMITS.pdfBase64) {
+      return "That PDF is too large — the limit is 20MB.";
+    }
+    return null;
+  }
+
+  return "Images and PDFs only.";
+}
+
+// Validate every attachment on every turn, and the request as a whole.
+// Returns an error string or null.
+function validateAttachments(messages) {
+  let total = 0;
+  for (const msg of messages) {
+    const list = attachmentsOf(msg);
+    if (!list.length) continue;
+    if (list.length > ATTACHMENT_LIMITS.perMessage) {
+      return `Up to ${ATTACHMENT_LIMITS.perMessage} attachments per message.`;
+    }
+    for (const att of list) {
+      const err = attachmentError(att);
+      if (err) return err;
+      total += att.base64.length;
+    }
+  }
+  if (total > ATTACHMENT_LIMITS.totalBase64) {
+    return "Those attachments are too large together — the limit is about 20MB per request.";
+  }
+  return null;
+}
+
+function attachmentsOf(msg) {
+  return msg && Array.isArray(msg.attachments) ? msg.attachments : [];
+}
+
+// True when any turn carries a PDF. Used only to recognise the page-limit
+// rejection, which is otherwise indistinguishable from any other 400.
+function hasPdfAttachment(messages) {
+  return messages.some((m) => attachmentsOf(m).some((a) => a && a.kind === "pdf"));
+}
+
+// --- Provider shaping ------------------------------------------------------
+// One attachment, in the shape each provider's API wants.
+//
+// The two APIs disagree about almost everything here — Anthropic nests the
+// bytes under `source`, the Responses API wants a data: URL — but they must
+// agree about WHAT is being sent. shapeMessages() checks that below.
+function shapeAttachment(provider, att) {
+  if (provider === "anthropic") {
+    return att.kind === "image"
+      ? {
+          type: "image",
+          source: { type: "base64", media_type: att.mediaType, data: att.base64 },
+        }
+      : {
+          type: "document",
+          source: { type: "base64", media_type: PDF_MEDIA_TYPE, data: att.base64 },
+        };
+  }
+  // OpenAI Responses API.
+  return att.kind === "image"
+    ? { type: "input_image", image_url: `data:${att.mediaType};base64,${att.base64}` }
+    : {
+        type: "input_file",
+        filename: att.name || "document.pdf",
+        file_data: `data:${PDF_MEDIA_TYPE};base64,${att.base64}`,
+      };
+}
+
+// The provider's name for a plain text block inside a multi-part user turn.
+function shapeText(provider, text) {
+  return provider === "anthropic"
+    ? { type: "text", text }
+    : { type: "input_text", text };
+}
+
+// Turn the wire format into the provider's message array.
+//
+// A turn with no attachments keeps its plain-string content, so a request
+// without attachments is byte-for-byte what this endpoint sent before they
+// existed. Only a turn that actually carries files becomes a block array —
+// and there the attachments come FIRST, before the user's text, for both
+// providers: a model reads the question last, with the material already in
+// front of it.
+function shapeMessages(provider, messages) {
+  return messages.map((msg) => {
+    const list = attachmentsOf(msg);
+    if (!list.length) {
+      return { role: msg.role, content: msg.content };
+    }
+    return {
+      role: msg.role,
+      content: [
+        ...list.map((att) => shapeAttachment(provider, att)),
+        shapeText(provider, msg.content),
+      ],
+    };
+  });
+}
+
+// Both models must be looking at the same thing, or a "second opinion" is
+// worthless — a reviewer that can't see the screenshot invents problems with
+// it. The shapes differ by design, so compare the only things that must
+// match: how many attachments each turn carries, and of what kind, in order.
+//
+// This is a self-check on the code above, not on user input (which is already
+// validated), so it logs rather than failing the request: a shaping bug should
+// be visible in the logs without taking the app down.
+function attachmentFingerprint(shaped, provider) {
+  return shaped
+    .map((msg) => {
+      if (!Array.isArray(msg.content)) return "-";
+      return msg.content
+        .map((block) => {
+          if (provider === "anthropic") {
+            if (block.type === "image") return "image";
+            if (block.type === "document") return "pdf";
+          } else {
+            if (block.type === "input_image") return "image";
+            if (block.type === "input_file") return "pdf";
+          }
+          return null;
+        })
+        .filter(Boolean)
+        .join(",");
+    })
+    .join("|");
+}
+
+function shapeMessagesChecked(provider, messages) {
+  const mine = shapeMessages(provider, messages);
+  if (!messages.some((m) => attachmentsOf(m).length)) return mine;
+
+  const other = provider === "anthropic" ? "openai" : "anthropic";
+  const theirs = shapeMessages(other, messages);
+  const a = attachmentFingerprint(mine, provider);
+  const b = attachmentFingerprint(theirs, other);
+  if (a !== b) {
+    console.warn(
+      "[attachments] provider shaping disagrees — the two models would not " +
+      `see the same files. ${provider}=${a} ${other}=${b}`
+    );
+  }
+  return mine;
+}
+
 // ---------------------------------------------------------------------------
 // Route handler — Cloudflare Pages Functions call onRequestPost for POST.
 // ---------------------------------------------------------------------------
@@ -226,6 +413,9 @@ export async function onRequestPost(context) {
     // read when it is 'passage'. Absent means 'full', which is byte-for-byte
     // the behaviour this endpoint had before passage reviews existed.
     reviewMode, passage, priorCritique,
+    // Attachments for the turn this request builds itself (critique mode).
+    // For chat and rebuttal they ride on the individual `messages` entries.
+    attachments,
   } = body || {};
 
   // Optional per-request output cap, used by small utility calls such as chat
@@ -275,7 +465,22 @@ export async function onRequestPost(context) {
   // Build the message list we'll send to the model, depending on the mode.
   const builtMessages = buildMessages({
     mode, messages, question, targetText, review, passage: passageFields,
+    attachments,
   });
+
+  // Re-validate everything the client sent. The browser enforces the same
+  // limits, but it is a browser: a hand-rolled request must not be able to
+  // push a 200MB base64 blob through this endpoint.
+  const attachmentProblem = validateAttachments(builtMessages);
+  if (attachmentProblem) {
+    return json({ error: "bad_request", message: attachmentProblem }, 400);
+  }
+  // Shaped once, here, so all four call paths below receive a provider-ready
+  // array and none of them has to know attachments exist.
+  const providerMessages = shapeMessagesChecked(provider, builtMessages);
+  // Only used to recognise Anthropic's page-limit rejection, which arrives as
+  // an ordinary 400.
+  const pdfPresent = hasPdfAttachment(builtMessages);
   const system = systemPromptFor({
     mode, review, question, passage: passageFields, priorCritique,
   });
@@ -303,8 +508,9 @@ export async function onRequestPost(context) {
       provider,
       apiKey,
       system,
-      messages: builtMessages,
+      messages: providerMessages,
       mcp,
+      pdfPresent,
     });
   }
 
@@ -315,9 +521,9 @@ export async function onRequestPost(context) {
     // notice and offers a "Continue" button.
     let result;
     if (provider === "anthropic") {
-      result = await callAnthropic({ apiKey, system, messages: builtMessages, mcp, maxTokensOverride });
+      result = await callAnthropic({ apiKey, system, messages: providerMessages, mcp, maxTokensOverride });
     } else {
-      result = await callOpenAI({ apiKey, system, messages: builtMessages, mcp, maxTokensOverride });
+      result = await callOpenAI({ apiKey, system, messages: providerMessages, mcp, maxTokensOverride });
     }
     // `usage` is the normalized token count (or null when the provider didn't
     // give us a usable one) and `model` is the exact model ID that served the
@@ -349,7 +555,7 @@ export async function onRequestPost(context) {
       {
         error: "provider_error",
         provider,
-        message: friendlyError(err),
+        message: friendlyError(err, { pdfPresent }),
       },
       200
     );
@@ -365,7 +571,11 @@ export async function onRequestPost(context) {
 // - rebuttal: pass the conversation history, then append the critique as a new
 //             user turn framed by the rebuttal system prompt.
 // ---------------------------------------------------------------------------
-function buildMessages({ mode, messages, question, targetText, review, passage }) {
+function buildMessages({ mode, messages, question, targetText, review, passage, attachments }) {
+  // Only ever attach to a turn this function CREATES. A chat or rebuttal turn
+  // carries its own attachments on the message itself.
+  const own = Array.isArray(attachments) && attachments.length ? attachments : null;
+
   // A passage critique carries everything — passage, surrounding context, the
   // user's note, the earlier critique as background — in the system prompt, so
   // the user turn is a bare instruction. In particular the earlier critique is
@@ -376,6 +586,7 @@ function buildMessages({ mode, messages, question, targetText, review, passage }
       {
         role: "user",
         content: "Give your second opinion on the highlighted passage.",
+        ...(own ? { attachments: own } : {}),
       },
     ];
   }
@@ -393,6 +604,10 @@ function buildMessages({ mode, messages, question, targetText, review, passage }
         content:
           ctx +
           `Here is the other assistant's answer to review:\n"""${target}"""`,
+        // The reviewer sees the same files the answer was written against.
+        // Without them it reviews a description of the evidence rather than
+        // the evidence, and reliably invents faults.
+        ...(own ? { attachments: own } : {}),
       },
     ];
   }
@@ -937,7 +1152,7 @@ function mergeRawUsage(target, incoming) {
 // event. Provider error bodies and API keys never cross this boundary — they
 // are logged server-side only.
 // ---------------------------------------------------------------------------
-async function handleStreamRequest(context, { provider, apiKey, system, messages, mcp }) {
+async function handleStreamRequest(context, { provider, apiKey, system, messages, mcp, pdfPresent }) {
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
@@ -968,7 +1183,7 @@ async function handleStreamRequest(context, { provider, apiKey, system, messages
         redact((err && err.detail) || "(none)")
       );
       try {
-        await send({ type: "error", message: friendlyError(err) });
+        await send({ type: "error", message: friendlyError(err, { pdfPresent }) });
       } catch {
         /* the client hung up — nothing to do */
       }
@@ -1484,10 +1699,29 @@ async function providerError(res) {
   return err;
 }
 
+// Anthropic caps PDFs at 100 pages and refuses longer ones with an ordinary
+// 400. Counting pages in the browser is not worth doing (it means parsing the
+// PDF), so the rejection is recognised here instead and translated into the
+// one sentence that actually tells the reader what to do about it.
+//
+// Matched on the provider's own words, not on a status code alone: a 400 with
+// a PDF attached could just as easily be a malformed request, and calling that
+// a page-limit problem would send someone off splitting a file for no reason.
+function isPdfPageLimitError(err) {
+  const detail = err && typeof err.detail === "string" ? err.detail : "";
+  if (!detail) return false;
+  return /\bpages?\b/i.test(detail) &&
+         /\b(exceed|limit|maximum|too many|at most)\b/i.test(detail);
+}
+
 // Map provider failures to a short, human-readable, non-leaky message.
-function friendlyError(err) {
+// `ctx.pdfPresent` says whether this request carried a PDF at all.
+function friendlyError(err, ctx = {}) {
   const status = err && err.status;
   if (status === 400) {
+    if (ctx.pdfPresent && isPdfPageLimitError(err)) {
+      return "PDF too long — Claude accepts up to 100 pages. Split it and attach the part you need.";
+    }
     return "The model rejected the request — a parameter may not be supported.";
   }
   if (status === 401 || status === 403) {
