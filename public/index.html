@@ -3363,7 +3363,10 @@
     rec.streaming = false;
 
     // --- Nothing streamed: fall back to the original blocking request ---
-    if (!out.started) {
+    // `aborted` is excluded deliberately. Stop pressed before the first token
+    // also lands here with started === false, and retrying it would fire a
+    // second billable request — the exact opposite of what Stop means.
+    if (!out.started && !out.aborted) {
       removeMessage(rec);
       // The server may have answered with plain JSON (e.g. a missing key);
       // if so it's already the complete reply and needs no second request.
@@ -3506,7 +3509,9 @@
     let extraUsage = null;
     let extraModel = null;
 
-    if (!out.started) {
+    // Stopped before the continuation produced anything: not a retry case.
+    // The else branch below pops the nudge and marks the reply stopped.
+    if (!out.started && !out.aborted) {
       // Fall back to the blocking request. The nudge is still in `history`,
       // which is what this call needs to send.
       let data = out.json;
@@ -4209,6 +4214,7 @@
 
     const criticAtRequest = critic;   // pin the role for this request
     const payload = buildCritiquePayload(review, criticAtRequest);
+    let failure = "";                 // why the review produced nothing, if so
 
     // Build the panel shell up front: the excerpt being reviewed, then an
     // empty card the critique streams into.
@@ -4236,7 +4242,9 @@
                                  () => panelScroller.tick(), "critique");
 
     // --- Nothing streamed: fall back to the blocking request -----------
-    if (!out.started) {
+    // Same rule as runPrimaryTurn: a stream the reader stopped before it
+    // produced anything must NOT be retried.
+    if (!out.started && !out.aborted) {
       let data = out.json;
       if (!data) {
         setPhase("critique");        // the stream never opened
@@ -4246,7 +4254,7 @@
         clearPhase();
       }
       if (data.error) {
-        // Show the friendly error inside the panel.
+        // Same rule as the streaming path above: the reason goes in the card.
         card.textContent = errorText(data, criticAtRequest);
         return;
       }
@@ -4259,19 +4267,25 @@
       lastCritique.stopped = !!out.aborted;
       lastCritique.usage = out.usage;
       lastCritique.apiModel = out.apiModel;
-      if (out.errorMessage) {
-        // Mid-stream failure: keep what arrived, say what happened.
-        handleError({ message: out.errorMessage }, criticAtRequest);
-      }
+      // Reported below, once it is known whether any text survived.
+      if (out.errorMessage) failure = out.errorMessage;
     }
 
-    // Nothing at all came back (stopped immediately, or an empty reply).
+    // Nothing at all came back (stopped immediately, an empty reply, or a
+    // failure). The reason belongs IN the card: the panel is what the reader
+    // is looking at, and "the reviewer returned nothing" describes the symptom
+    // while the actual cause — a rejected key, a rate limit — sits in a banner
+    // over in the chat column where it reads as unrelated.
     if (!lastCritique.text) {
       card.textContent = lastCritique.stopped
         ? "Stopped before the review started."
-        : "The reviewer returned nothing. Try again.";
+        : failure || "The reviewer returned nothing. Try again.";
       return;
     }
+
+    // Some text did arrive, so the card is showing it. The reason for the
+    // failure has nowhere to go in the panel — that is what the banner is for.
+    if (failure) handleError({ message: failure }, criticAtRequest);
 
     // A critique is a billed call whether or not it is ever sent back into
     // the thread, so it is counted here — once, at the point of the call.
@@ -4366,7 +4380,7 @@
       const out = await streamText(lastCritique, card, payload, "panel",
                                    () => panelScroller.tick(), "continuing");
 
-      if (!out.started) {
+      if (!out.started && !out.aborted) {
         let data = out.json;
         if (!data) data = await callApi(payload).catch(() => ({ error: "network" }));
         if (data.error) {
@@ -4544,7 +4558,9 @@
     note.streaming = false;
 
     // --- Nothing streamed: fall back to the blocking request -----------
-    if (!out.started) {
+    // Stopped before anything arrived is not a failure to retry — see
+    // runPrimaryTurn.
+    if (!out.started && !out.aborted) {
       let data = out.json;
       if (!data) {
         setPhase("rebuttal");
