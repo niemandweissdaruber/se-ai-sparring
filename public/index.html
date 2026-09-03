@@ -1718,6 +1718,31 @@
       transition: background 0.2s ease;
     }
     button.send-back:hover { background: var(--primary-action-hover); }
+
+    button.update-answer {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font: inherit;
+      font-weight: 700;
+      font-size: 14px;
+      color: #0e0f13;
+      background: var(--primary-action);
+      border: none;
+      padding: 13px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+    button.update-answer:hover:not(:disabled) { background: var(--primary-action-hover); }
+    button.update-answer:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* Both footer buttons set display:flex, which beats the UA stylesheet's
+       [hidden] { display: none } on specificity — without this the Stop and
+       Update buttons show at the same time. */
+    .panel-foot button[hidden] { display: none; }
     button.send-back:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* ---- Floating "Critique selection" button ------------------------ */
@@ -1835,10 +1860,7 @@
       transition: transform 0.12s ease;
     }
     .review-marker:hover { transform: scale(1.25); }
-    /* Answered reviews read as filled (❶), unanswered as outline (①) — see
-       ordinalGlyph(). The opacity is a second, weaker cue on top of the glyph
-       itself, never the only one. */
-    .review-marker:not(.answered) { opacity: 0.8; }
+    .review-marker { opacity: 0.85; }
 
     /* ---- Panel: the list of review cards ----------------------------- */
     .review-card {
@@ -1894,21 +1916,6 @@
     .review-card .rc-body { color: var(--text-dim); }
     .review-card .rc-body.md p:last-child,
     .review-card .rc-body.md ul:last-child { margin-bottom: 0; }
-
-    .review-card .rc-rebuttal {
-      margin-top: 11px;
-      padding-top: 10px;
-      border-top: 1px solid var(--border-soft);
-    }
-    .review-card .rc-rebuttal-head {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--text-faint);
-      margin-bottom: 6px;
-    }
-    .review-card .rc-rebuttal-body { color: var(--text); }
 
     button.rc-sendback {
       font: inherit;
@@ -2233,11 +2240,15 @@
 
           <div class="panel-body" id="panel-body"></div>
 
-          <div class="panel-foot">
-            <!-- Doubles as Stop while a critique is streaming. -->
+          <div class="panel-foot" id="panel-foot">
+            <!-- Stop, shown only while a review is streaming. -->
             <button class="send-back" id="send-back" onclick="onPanelClick()">
-              <span id="send-back-label">Send back to Claude</span>
+              <span id="send-back-label">Stop</span>
             </button>
+            <!-- Sends every held critique back in ONE request and appends the
+                 rewritten answer to the chat. -->
+            <button class="update-answer" id="update-answer"
+                    onclick="updateAnswerFromReviews()">Update answer</button>
           </div>
         </div>
       </aside>
@@ -2985,7 +2996,12 @@
   //
   //  Stored per message as rec.reviews:
   //    { id, ordinal, mode, selectionText, startOffset, endOffset,
-  //      verdict, body, criticModel, userNote, rebuttal, … }
+  //      verdict, body, criticModel, userNote, … }
+  //
+  //  A passage review is a READING and nothing more: the reviewer's take on
+  //  one paragraph. It used to be followed by a second call asking the primary
+  //  model to revise that paragraph — two model calls per highlight — which is
+  //  the half this flow no longer does.
   //
   //  `ordinal` is creation order and is what the marker shows, so a number
   //  never changes meaning once you have seen it. The PANEL, by contrast,
@@ -3003,19 +3019,14 @@
     return "r" + Date.now().toString(36) + (++reviewSeq).toString(36);
   }
 
-  // Two glyph sets, not two shades of one: an ANSWERED review is drawn with
-  // the filled dingbat (❶), an unanswered one with the outline (①). Opacity
-  // alone was indistinguishable at superscript size, which defeats the point
-  // of showing which readings have been replied to.
+  // ①..⑳ cover every realistic case; past that a plain (21) still reads.
   //
-  // The filled set only runs to 10, so past that both fall back to the
-  // outline glyph and the weight carries the difference.
+  // There used to be a second, filled set (❶) marking reviews the primary
+  // model had answered. Nothing answers a passage review any more, so the
+  // state was unreachable and the glyph went with it.
   const CIRCLED_OUTLINE = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳";
-  const CIRCLED_FILLED = "❶❷❸❹❺❻❼❽❾❿";
-  function ordinalGlyph(n, filled) {
-    if (filled && n >= 1 && n <= CIRCLED_FILLED.length) return CIRCLED_FILLED[n - 1];
-    if (n >= 1 && n <= CIRCLED_OUTLINE.length) return CIRCLED_OUTLINE[n - 1];
-    return "(" + n + ")";
+  function ordinalGlyph(n) {
+    return n >= 1 && n <= CIRCLED_OUTLINE.length ? CIRCLED_OUTLINE[n - 1] : "(" + n + ")";
   }
 
   // The next marker number for a message: creation order, never reused, so
@@ -3126,12 +3137,10 @@
 
   function appendMarker(lastMark, rec, review) {
     const sup = document.createElement("sup");
-    sup.className = "review-marker" + (review.rebuttal ? " answered" : "");
+    sup.className = "review-marker";
     sup.dataset.review = review.id;
-    sup.textContent = ordinalGlyph(review.ordinal, !!review.rebuttal);
-    sup.title = review.rebuttal
-      ? `Review ${review.ordinal} — answered. Click to open it.`
-      : `Review ${review.ordinal} — not yet answered. Click to open it.`;
+    sup.textContent = ordinalGlyph(review.ordinal);
+    sup.title = `Review ${review.ordinal}. Click to open it.`;
     sup.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -3248,25 +3257,15 @@
         truncated: !!r.truncated,
         stopped: !!r.stopped,
         tools: normalizeToolCalls(r.tools),
-        rebuttal: normalizeRebuttal(r.rebuttal),
+        // `promoted` is a full review that has already been sent into the
+        // conversation. A conversation saved when passage reviews still had
+        // revisions carries an `r.rebuttal`; it is deliberately dropped rather
+        // than migrated, because the revision no longer has anywhere to show.
+        promoted: !!r.promoted || (r.mode === "full" && !!r.rebuttal),
         streaming: false,
         anchored: false,
       }));
     return out.length ? out : null;
-  }
-
-  function normalizeRebuttal(raw) {
-    if (!raw || typeof raw !== "object" || typeof raw.text !== "string" || !raw.text) {
-      return null;
-    }
-    return {
-      text: raw.text,
-      model: MODELS[raw.model] ? raw.model : primary,
-      usage: normalizeUsage(raw.usage),
-      apiModel: typeof raw.apiModel === "string" ? raw.apiModel : null,
-      truncated: !!raw.truncated,
-      stopped: !!raw.stopped,
-    };
   }
 
   function serializeReviews(list) {
@@ -3291,16 +3290,7 @@
       truncated: !!r.truncated,
       stopped: !!r.stopped,
       tools: Array.isArray(r.tools) && r.tools.length ? r.tools : null,
-      rebuttal: r.rebuttal
-        ? {
-            text: r.rebuttal.text,
-            model: r.rebuttal.model,
-            usage: r.rebuttal.usage || null,
-            apiModel: r.rebuttal.apiModel || null,
-            truncated: !!r.rebuttal.truncated,
-            stopped: !!r.rebuttal.stopped,
-          }
-        : null,
+      promoted: !!r.promoted,
     }));
   }
 
@@ -3473,9 +3463,14 @@
 
   // Sends the full history to the primary model and streams its reply.
   // opts.rebuttal marks the reply visually as a rebuttal.
+  // opts.model pins WHICH model answers, for turns that must go back to the
+  //   model that wrote an earlier message rather than to whoever is primary
+  //   now — the roles can be swapped mid-conversation.
+  // opts.phase names the header indicator.
+  // Returns the message record it produced, or null when nothing was.
   async function runPrimaryTurn(opts = {}) {
     setBusy(true);
-    const model = primary;                       // pin the role for this turn
+    const model = MODELS[opts.model] ? opts.model : primary;   // pin for this turn
     const kind = opts.rebuttal ? "rebuttal" : "plain";
     const payload = {
       provider: MODELS[model].provider,
@@ -3505,7 +3500,7 @@
 
     const out = await streamText(rec, rec.el.querySelector(".bubble"),
                                  payload, "chat", () => chatScroller.tick(),
-                                 opts.rebuttal ? "rebuttal" : "answer");
+                                 opts.phase || (opts.rebuttal ? "rebuttal" : "answer"));
     rec.streaming = false;
 
     // --- Nothing streamed: fall back to the original blocking request ---
@@ -3519,7 +3514,7 @@
       let data = out.json;
       if (!data) {
         // The stream never opened, so beginStream never set the phase.
-        setPhase(opts.rebuttal ? "rebuttal" : "answer");
+        setPhase(opts.phase || (opts.rebuttal ? "rebuttal" : "answer"));
         const typing = showTyping(model);
         data = await callApi(payload).catch(() => ({ error: "network" }));
         typing.remove();
@@ -3528,11 +3523,11 @@
       if (data.error) {
         handleError(data, model);
         setBusy(false);
-        return;
+        return null;
       }
       history.push({ role: "assistant", content: data.text });
       const fallbackUsage = normalizeUsage(data.usage);
-      addMessage({
+      const fallbackRec = addMessage({
         role: "assistant",
         text: data.text,
         model,
@@ -3547,7 +3542,7 @@
       setBusy(false);
       saveCurrent();
       maybeTitleConversation(kind);
-      return;
+      return fallbackRec;
     }
 
     // --- Streamed (possibly stopped, or failed part-way) ---------------
@@ -3565,7 +3560,7 @@
       recordSpend(MODELS[model].provider, rec.apiModel, rec.usage);
       removeMessage(rec);
       setBusy(false);
-      return;
+      return null;
     }
 
     // history first, so the final render can decide whether to offer
@@ -3579,6 +3574,7 @@
     setBusy(false);
     saveCurrent();                // save once, complete — not per chunk
     maybeTitleConversation(kind);
+    return rec;
   }
 
   // Name the chat after its first completed primary answer — never on a
@@ -4332,7 +4328,7 @@
     if (review.mode === "passage") {
       const num = document.createElement("span");
       num.className = "rc-num";
-      num.textContent = ordinalGlyph(review.ordinal, !!review.rebuttal);
+      num.textContent = ordinalGlyph(review.ordinal);
       num.title = "Jump to this passage";
       num.onclick = () => focusMarkerFromCard(rec, review);
       head.appendChild(num);
@@ -4385,39 +4381,20 @@
 
     if (review.truncated || review.stopped) card.appendChild(makeCutoffNote(review));
 
-    // --- the rebuttal, when this review has been answered ---
-    if (review.rebuttal) {
-      const wrap = document.createElement("div");
-      wrap.className = "rc-rebuttal";
-      const h = document.createElement("div");
-      h.className = "rc-rebuttal-head";
-      h.textContent =
-        (MODELS[review.rebuttal.model] ? MODELS[review.rebuttal.model].name : "The author") +
-        (review.mode === "passage" ? "'s revision of this passage" : "'s response");
-      wrap.appendChild(h);
-      const rb = document.createElement("div");
-      rb.className = "rc-rebuttal-body";
-      rb.dataset.rebuttalBody = review.id;
-      renderMarkdownInto(rb, review.rebuttal.text, { streaming: !!review.rebuttal.streaming });
-      if (review.rebuttal.streaming) appendCursor(rb);
-      wrap.appendChild(rb);
-      card.appendChild(wrap);
-    }
-
     // --- actions, scoped to THIS card ---
     const actions = document.createElement("div");
     actions.className = "actions";
     if (review.truncated || review.stopped) {
       actions.appendChild(makeReviewContinueButton(rec, review));
     }
-    if (!review.rebuttal) {
+    // Passage reviews have nowhere to be sent: they are a reading of one
+    // paragraph and end there.
+    if (review.mode === "full" && !review.promoted) {
       const send = document.createElement("button");
       send.type = "button";
       send.className = "rc-sendback";
       send.textContent = `Send back to ${MODELS[primary].name}`;
-      send.title = review.mode === "passage"
-        ? "Ask for a revision of this passage only"
-        : "Send this review into the conversation for a rebuttal";
+      send.title = "Send this review into the conversation for a rebuttal";
       send.onclick = () => sendBackReview(rec, review, send);
       actions.appendChild(send);
     }
@@ -4426,10 +4403,6 @@
 
     const usage = buildUsageLine(review);
     if (usage) card.appendChild(usage);
-    if (review.rebuttal) {
-      const ru = buildUsageLine(review.rebuttal);
-      if (ru) card.appendChild(ru);
-    }
     return card;
   }
 
@@ -4742,20 +4715,100 @@
     );
   }
 
-  // --- Send one review back to the primary model ----------------------
-  // Scoped to a single card. Two shapes, decided by that review's mode:
-  //   full     the review becomes a message in the thread and the primary
-  //            model answers it as a rebuttal — a new bubble, as before.
-  //   passage  nothing is added to the conversation view. The reply belongs
-  //            to one passage, so it lands in that passage's card and flips
-  //            its marker to answered.
+  // --- Update the answer from every held critique ----------------------
+  // ONE request, not one per paragraph. The model that WROTE the answer gets
+  // its own text back plus each criticised paragraph and the criticism of it,
+  // and returns a complete replacement — appended as a new message, never an
+  // edit of the old one, so the two can be compared.
+  //
+  // This reuses runPrimaryTurn wholesale: streaming, SE Ranking grounding
+  // (withMcp applies inside openStream/callApi), token accounting, Stop, the
+  // blocking fallback and persistence all come from there rather than being
+  // rebuilt here. The only thing it needed was `opts.model` — the answer's
+  // author may no longer be the primary model.
+  async function updateAnswerFromReviews() {
+    const rec = panelMessage();
+    if (!rec) return;
+    const held = heldPassageReviews();
+    if (!held.length || busyState || activeStream) return;
+
+    // The answer is rewritten by whoever wrote it, not by whoever happens to
+    // be primary now.
+    const author = MODELS[rec.model] ? rec.model : primary;
+    if (!hasKey(author)) { openSettings(author); return; }
+
+    hideBanner();
+    closePanel();
+
+    // Plumbing turn — framed, never rendered as a user bubble, same as the
+    // critique hand-off in sendBackFullReview().
+    history.push({ role: "user", content: frameAnswerUpdate(rec, held) });
+
+    // The critiques describe the OLD answer, so they go stale the moment a new
+    // one exists. Cleared optimistically and put back if the request produced
+    // nothing, rather than losing the reader's work to a network error.
+    const stash = rec.reviews;
+    rec.reviews = null;
+    refreshMessage(rec);          // drops the highlights and markers too
+    renderPanel(null);
+
+    const produced = await runPrimaryTurn({ model: author, phase: "updating" });
+
+    if (!produced) {
+      // Nothing came back: undo the clear and the plumbing turn, and put the
+      // panel back on this message. refreshPanelFor() is no use here —
+      // renderPanel(null) above dropped panelMessageId, so it would match
+      // nothing and leave the restored critiques unreachable with the Update
+      // button dead.
+      rec.reviews = stash;
+      const tail = history[history.length - 1];
+      if (tail && tail.role === "user") history.pop();
+      refreshMessage(rec);
+      openPanel();
+      renderPanel(rec);
+      saveCurrent();
+    }
+  }
+
+  // The single user turn that carries the whole update request.
+  function frameAnswerUpdate(rec, held) {
+    const parts = [
+      "This is outside criticism of specific paragraphs in your answer.",
+      'Your answer:\n"""' + rec.text + '"""',
+    ];
+
+    const items = held.map((r, i) => {
+      return (
+        `(${i + 1}) The paragraph:\n"""${r.selectionText}"""\n\n` +
+        `The criticism of it:\n"""${reviewFullText(r)}"""` +
+        (r.userNote ? `\n\nThe user also asked: ${r.userNote}` : "")
+      );
+    });
+    parts.push(
+      "Criticism of specific paragraphs, in the order they appear:\n\n" +
+      items.join("\n\n")
+    );
+
+    parts.push(
+      "Produce the complete updated answer. Accept the criticism where it is " +
+      "correct and defend your position where it is not — do not soften claims " +
+      "you still stand behind, and do not weaken parts of the answer that were " +
+      "not criticised."
+    );
+
+    return parts.join("\n\n");
+  }
+
+  // --- Send a FULL review back to the primary model --------------------
+  // Only full reviews go back. A passage review is a reading of one paragraph
+  // and stops there: it used to spend a second call asking the primary model
+  // to revise that paragraph, which is the call this flow no longer makes.
   async function sendBackReview(rec, review, btn) {
-    if (review.rebuttal) return;                 // already answered
+    if (review.mode !== "full") return;
+    if (review.promoted) return;                 // already in the thread
     if (!hasKey(primary)) { openSettings(primary); return; }
     if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
-    return review.mode === "passage"
-      ? sendBackPassageReview(rec, review)
-      : sendBackFullReview(rec, review);
+    return sendBackFullReview(rec, review);
   }
 
   async function sendBackFullReview(rec, review) {
@@ -4785,123 +4838,12 @@
       `Please respond to it.`;
     history.push({ role: "user", content: framed });
 
-    // Mark it answered so the card stops offering to send it a second time.
-    review.rebuttal = {
-      text: "(answered in the conversation below)",
-      model: primary,
-      promoted: true,
-      usage: null,
-      apiModel: null,
-    };
+    // Mark it sent so the card stops offering to send it a second time. The
+    // reply itself lives in the conversation, not in the card.
+    review.promoted = true;
     refreshPanelFor(rec);
 
     await runPrimaryTurn({ rebuttal: true, reviewMode: "full" });
-  }
-
-  // The reviewer commented on one passage, so the reply is about that passage.
-  // Making it a full bubble would imply the whole answer was rewritten, which
-  // is exactly what the server's rebuttalPassage prompt forbids.
-  async function sendBackPassageReview(rec, review) {
-    setBusy(true);
-    const model = primary;             // pin the role for this turn
-
-    review.rebuttal = {
-      text: "",                        // streamText writes here
-      model,
-      streaming: true,
-      truncated: false,
-      stopped: false,
-      usage: null,
-      apiModel: null,
-    };
-    renderPanel(rec);
-
-    // The exchange still enters `history` so later turns remember it — it
-    // just never becomes a bubble, exactly like the framed critique turn in
-    // full mode. The server's passage rebuttal prompt does the framing.
-    history.push({ role: "user", content: framePassageRebuttal(review) });
-
-    const payload = {
-      provider: MODELS[model].provider,
-      mode: "rebuttal",
-      reviewMode: "passage",
-      messages: history,
-    };
-
-    const card = cardEl(review);
-    const el = card && card.querySelector(`[data-rebuttal-body="${review.id}"]`);
-    if (!el) {
-      review.rebuttal = null;
-      history.pop();
-      setBusy(false);
-      refreshPanelFor(rec);
-      return;
-    }
-
-    const out = await streamText(review.rebuttal, el, payload, "panel",
-                                 () => panelScroller.tick(), "rebuttal");
-    review.rebuttal.streaming = false;
-
-    if (!out.started && !out.aborted) {
-      let data = out.json;
-      if (!data) {
-        setPhase("rebuttal");
-        data = await callApi(payload).catch(() => ({ error: "network" }));
-        clearPhase();
-      }
-      if (data.error) {
-        // Undo cleanly: no half-written rebuttal, no orphan history turn.
-        review.rebuttal = null;
-        history.pop();
-        handleError(data, model);
-        setBusy(false);
-        renderPanel(rec);
-        return;
-      }
-      review.rebuttal.text = data.text;
-      review.rebuttal.truncated = !!data.truncated;
-      review.rebuttal.usage = normalizeUsage(data.usage);
-      review.rebuttal.apiModel = data.model || null;
-    } else {
-      review.rebuttal.truncated = out.truncated;
-      review.rebuttal.stopped = !!out.aborted;
-      review.rebuttal.usage = out.usage;
-      review.rebuttal.apiModel = out.apiModel;
-      if (out.errorMessage) handleError({ message: out.errorMessage }, model);
-    }
-
-    // Stopped or failed before a single character. The input tokens were sent
-    // and billed, so the estimate is still recorded.
-    if (!review.rebuttal.text) {
-      recordSpend(MODELS[model].provider, review.rebuttal.apiModel, review.rebuttal.usage);
-      review.rebuttal = null;
-      history.pop();
-      setBusy(false);
-      renderPanel(rec);
-      saveCurrent();
-      return;
-    }
-
-    history.push({ role: "assistant", content: review.rebuttal.text });
-    recordSpend(MODELS[model].provider, review.rebuttal.apiModel, review.rebuttal.usage);
-    refreshMessage(rec);               // flips the marker to answered
-    renderPanel(rec);
-    // A new turn at the tail of `history` can invalidate older Continue
-    // buttons, and this path never went through addMessage().
-    refreshContinueButtons(rec);
-    setBusy(false);
-    saveCurrent();
-  }
-
-  // The user turn that carries a passage rebuttal. Never rendered as a bubble.
-  function framePassageRebuttal(review) {
-    const bits = [
-      'A reviewer commented on this one passage of your previous answer:\n"""' +
-      (review.selectionText || "") + '"""',
-    ];
-    if (review.userNote) bits.push("The user asked about it: " + review.userNote);
-    bits.push('Their comment:\n"""' + reviewFullText(review) + '"""');
-    return bits.join("\n\n");
   }
 
   // --- Text-selection → floating critique button ---------------------
@@ -5101,6 +5043,8 @@
     busyState = busy;
     $("input").disabled = busy;
     applySendButton();
+    // "Update answer" must go dead mid-turn too, not just the composer.
+    applyPanelButton();
   }
 
   // --- Friendly error handling --------------------------------------
@@ -6299,6 +6243,7 @@
     answer: "Answering…",
     critique: "Second opinion…",
     rebuttal: "Rebuttal…",
+    updating: "Updating answer…",
     continuing: "Continuing…",
     titling: null,          // title generation is silent: no phase shown
   };
@@ -6560,23 +6505,49 @@
     }
   }
 
-  // The panel footer used to be the single "Send back" button. Every card now
-  // carries its own, scoped to that review, so the footer's only remaining job
-  // is Stop — and it hides when there is nothing to stop.
+  // The panel footer holds two mutually exclusive controls: Stop while a
+  // review is streaming, and "Update answer" the rest of the time. Every card
+  // carries its own send-back, so the footer's old single button is gone.
   function applyPanelButton() {
     const btn = $("send-back");
     const label = $("send-back-label");
-    const foot = btn.parentElement;
-    if (activeStream && activeStream.source === "panel") {
-      foot.hidden = false;
-      btn.classList.add("stop");
-      btn.disabled = false;
-      label.textContent = "Stop";
-    } else {
-      foot.hidden = true;
-      btn.classList.remove("stop");
-      label.textContent = "Stop";
-    }
+    const update = $("update-answer");
+    const foot = $("panel-foot");
+    const streaming = !!(activeStream && activeStream.source === "panel");
+
+    btn.hidden = !streaming;
+    btn.classList.toggle("stop", streaming);
+    btn.disabled = false;                   // Stop must stay clickable
+    label.textContent = "Stop";
+
+    const n = heldCritiqueCount();
+    update.hidden = streaming;
+    update.textContent = n
+      ? `Update answer (${n} critique${n === 1 ? "" : "s"})`
+      : "Update answer";
+    // Enabled only with something to act on, and never mid-turn.
+    update.disabled = n === 0 || busyState || !!activeStream;
+    update.title = n === 0
+      ? "Critique a paragraph first"
+      : `Send ${n} critique${n === 1 ? "" : "s"} back in one request and append the updated answer`;
+
+    // Nothing to show at all: keep the footer out of the layout.
+    foot.hidden = !streaming && n === 0;
+  }
+
+  // The critiques the Update button will actually send: passage reviews on the
+  // message the panel is showing. A FULL review has no paragraph to quote and
+  // would contradict the instruction ("criticism of specific paragraphs"), so
+  // it is deliberately not counted here even though it shows in the list.
+  function heldPassageReviews() {
+    const rec = panelMessage();
+    if (!rec) return [];
+    return orderedReviews(rec).filter(
+      (r) => r.mode === "passage" && !r.streaming && (r.verdict || r.body)
+    );
+  }
+  function heldCritiqueCount() {
+    return heldPassageReviews().length;
   }
 
   // --- The shared streaming driver ------------------------------------
