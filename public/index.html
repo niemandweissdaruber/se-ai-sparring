@@ -1793,11 +1793,17 @@
        about?" note. Shown before the request so the note can actually reach
        the reviewer, rather than after, which would cost a second call. */
     .passage-prompt { margin-bottom: 14px; }
+    /* A little more room than the card's copy: this quote is the only thing
+       separating the question from the passage it is about. */
+    .passage-prompt .rc-excerpt {
+      padding: 10px 12px;
+      margin-bottom: 14px;
+    }
     .passage-prompt label {
       display: block;
       font-size: 12px;
       color: var(--text-faint);
-      margin-bottom: 6px;
+      margin-bottom: 8px;
     }
     .passage-prompt input {
       width: 100%;
@@ -1928,15 +1934,13 @@
     }
     button.select-all-toggle:hover { text-decoration: underline; }
 
-    .review-card .rc-critic {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 11.5px;
-      color: var(--text-faint);
-    }
-    .review-card .rc-excerpt {
+    /* The quoted passage, in a review card AND in the pre-flight prompt.
+       Deliberately smaller and muted: it is the context you are reviewing
+       against, not the content of the card.
+       Was scoped to .review-card, which the pre-flight prompt is not inside —
+       so that quote rendered entirely unstyled, at body weight and flush
+       against its container. */
+    .rc-excerpt {
       font-size: 12px;
       color: var(--text-faint);
       background: var(--bg-0);
@@ -1944,9 +1948,10 @@
       border-radius: 8px;
       padding: 8px 10px;
       margin-bottom: 10px;
-      cursor: pointer;
     }
-    .review-card .rc-excerpt b { color: var(--text-dim); }
+    .rc-excerpt b { color: var(--text-dim); }
+    /* Only the card's quote is a jump target. */
+    .review-card .rc-excerpt { cursor: pointer; }
     .review-card .rc-verdict {
       font-weight: 700;
       color: var(--text);
@@ -4494,11 +4499,6 @@
     badge.textContent = review.mode === "passage" ? "Passage review" : "Full review";
     head.appendChild(badge);
 
-    const who = document.createElement("span");
-    who.className = "rc-critic";
-    who.innerHTML = badgeHTML(review.criticModel);
-    who.appendChild(document.createTextNode(MODELS[review.criticModel].name));
-    head.appendChild(who);
     card.appendChild(head);
 
     // The passage could not be found in the current text. Say so rather than
