@@ -66,15 +66,6 @@ const SYSTEM_PROMPTS = {
     "back where you think it is wrong or has misread you — explaining why. Do not " +
     "cave just to be agreeable, and do not defend a mistake. End with a corrected " +
     "version of your answer if anything changed.",
-
-  // The passage-mode counterpart of `rebuttal`. The whole point of a passage
-  // review is that it is NARROW, so the reply must be narrow too: no rewrite
-  // of the surrounding answer, no restructuring, just this one passage.
-  rebuttalPassage:
-    "The reviewer commented on one passage of your answer. Respond to that " +
-    "comment only. Do not rewrite or restructure the rest of the answer. " +
-    "Output either a revised version of that passage, or a short defense of it " +
-    "as written.",
 };
 
 // --- REVIEW MODES ---------------------------------------------------------
@@ -91,6 +82,10 @@ const SYSTEM_PROMPTS = {
 //            thing being answered, or the reviewer grades the passage as a
 //            reply to itself. It travels as background inside the system
 //            prompt instead, explicitly labelled as not-under-review.
+//
+// Only a CRITIQUE is shaped by this. Nothing sends a rebuttal in passage mode:
+// a passage review is now read in the panel and either applied to the answer
+// or not, so there is no per-paragraph reply to prompt for.
 //
 // Both providers are handed the SAME `system` string and the SAME `messages`
 // array (see callAnthropic / callOpenAI, which differ only in where each API
@@ -684,13 +679,12 @@ function buildMessages({ mode, messages, question, targetText, review, passage, 
 // the framing — and it changes it identically for both providers, because
 // both are handed this one string.
 function systemPromptFor({ mode, review, question, passage, priorCritique }) {
-  if (review === "passage") {
-    if (mode === "critique") {
-      return buildPassageSystemPrompt({ question, passage, priorCritique });
-    }
-    if (mode === "rebuttal") {
-      return SYSTEM_PROMPTS.rebuttalPassage;
-    }
+  // Review mode only ever changes a CRITIQUE. It used to switch the rebuttal
+  // prompt too, back when sending a passage review back asked the author to
+  // revise that one paragraph; that call no longer exists, so a rebuttal is
+  // always a reply to a whole-answer review.
+  if (review === "passage" && mode === "critique") {
+    return buildPassageSystemPrompt({ question, passage, priorCritique });
   }
   return SYSTEM_PROMPTS[mode];
 }
