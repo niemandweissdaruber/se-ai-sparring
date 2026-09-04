@@ -136,26 +136,37 @@ function normalizePassage(raw) {
   };
 }
 
-// The passage-review system prompt. Everything the reviewer needs is in here
-// — the passage, where it sits, the user's note, and (as background only) the
-// reviewer's own earlier critique. The user turn is a bare instruction.
+// A passage review comes in two shapes, and which one you get depends on
+// whether the reader wrote a comment alongside the highlight.
+//
+//   no comment   the reviewer judges the passage and returns a verdict. This
+//                is a second opinion: the reader wants to know whether the
+//                claim holds.
+//
+//   a comment    the reader has said something, and the reviewer is answering
+//                THEM. Asking for a verdict here would be the wrong question —
+//                it invites the model to grade a paragraph when what was
+//                actually asked was "is this person right?". So the verdict
+//                and the whole Format block are absent from that prompt, and
+//                the client renders no stance line for one either.
+//
+// Both travel as `reviewMode: "passage"`; the presence of userNote is the
+// switch. Nothing else about the request changes.
+function buildPassageSystemPrompt({ question, passage, priorCritique }) {
+  return passage.userNote
+    ? buildPassageCommentPrompt({ question, passage, priorCritique })
+    : buildPassageVerdictPrompt({ question, passage, priorCritique });
+}
+
+// Where the passage sits, plus the reviewer's own earlier critique as labelled
+// background. Shared by both shapes; the original question is placed by each
+// caller, because the two want it in different positions.
 //
 // Empty fields are omitted rather than rendered as empty quotes: an empty
 // `Before: """"""` reads like "there is nothing before this", which is a
 // claim we can't make when the highlight simply couldn't be located.
-function buildPassageSystemPrompt({ question, passage, priorCritique }) {
+function passageContextParts({ passage, priorCritique }) {
   const parts = [];
-
-  parts.push(
-    "You are giving a second opinion on ONE SPECIFIC PASSAGE the user\n" +
-    "highlighted. You are not reviewing the whole answer."
-  );
-
-  if (question) {
-    parts.push(`The user's original question: ${question}`);
-  }
-
-  parts.push(`The highlighted passage:\n"""${passage.selectionText}"""`);
 
   const where = [];
   if (passage.sectionHeading) where.push(`Section: ${passage.sectionHeading}`);
@@ -165,10 +176,6 @@ function buildPassageSystemPrompt({ question, passage, priorCritique }) {
     parts.push(
       "Where it sits (context only, not under review):\n" + where.join("\n")
     );
-  }
-
-  if (passage.userNote) {
-    parts.push(`The user also asks: ${passage.userNote}`);
   }
 
   // The earlier critique goes HERE and nowhere else — never as the message
@@ -181,6 +188,24 @@ function buildPassageSystemPrompt({ question, passage, priorCritique }) {
       `"""${background}"""`
     );
   }
+
+  return parts;
+}
+
+// SHAPE 1 — no comment. A second opinion on one passage, ending in a verdict.
+function buildPassageVerdictPrompt({ question, passage, priorCritique }) {
+  const parts = [];
+
+  parts.push(
+    "You are giving a second opinion on ONE SPECIFIC PASSAGE the user\n" +
+    "highlighted. You are not reviewing the whole answer."
+  );
+
+  if (question) parts.push(`The user's original question: ${question}`);
+
+  parts.push(`The highlighted passage:\n"""${passage.selectionText}"""`);
+
+  parts.push(...passageContextParts({ passage, priorCritique }));
 
   parts.push(
     "Rules:\n" +
@@ -199,6 +224,43 @@ function buildPassageSystemPrompt({ question, passage, priorCritique }) {
     "- 2-4 bullets, each about this passage only\n" +
     "- One closing line: what evidence would settle it\n" +
     "Under 200 words."
+  );
+
+  return parts.join("\n\n");
+}
+
+// SHAPE 2 — the reader commented. This is a turn in a conversation, so the
+// reviewer is answering a person, not grading a paragraph. Deliberately
+// absent: any instruction to take a stance, produce a verdict, or fill a
+// verdict field.
+function buildPassageCommentPrompt({ question, passage, priorCritique }) {
+  const parts = [];
+
+  parts.push(
+    "The following passage was written by another AI model.\n" +
+    `"""${passage.selectionText}"""`
+  );
+
+  parts.push(`The user has responded to it:\n"""${passage.userNote}"""`);
+
+  if (question) parts.push(`The user's original question was: ${question}`);
+
+  parts.push(...passageContextParts({ passage, priorCritique }));
+
+  parts.push(
+    "Address what the user raised, using the passage as context. Investigate\n" +
+    "their point using the tools available to you."
+  );
+
+  parts.push(
+    "If the user is right and the passage is wrong, say so. If the user is\n" +
+    "mistaken, say so directly. If you cannot verify their point, say it is\n" +
+    "unverified rather than reasoning your way to a conclusion."
+  );
+
+  parts.push(
+    "Do not agree with the user because they are the user. Do not defer to the\n" +
+    "passage because it was written first."
   );
 
   return parts.join("\n\n");

@@ -1879,6 +1879,7 @@
     .review-card .rc-head {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 8px;
       margin-bottom: 9px;
     }
@@ -1889,6 +1890,44 @@
       color: var(--critic-accent);
       cursor: pointer;
     }
+    /* The header now carries a tick box as well as the number and badge, so it
+       wraps rather than crushing the reviewer name on a narrow panel. */
+    .review-card .rc-apply {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--text-faint);
+      cursor: pointer;
+      user-select: none;
+    }
+    .review-card .rc-apply input {
+      appearance: auto;
+      accent-color: var(--critic-accent);
+      width: 13px;
+      height: 13px;
+      margin: 0;
+      cursor: pointer;
+    }
+    .review-card .rc-apply:hover { color: var(--text-dim); }
+
+    .select-all-row {
+      display: flex;
+      justify-content: flex-end;
+      margin: 0 0 9px;
+    }
+    button.select-all-toggle {
+      font: inherit;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--critic-accent);
+      background: none;
+      border: none;
+      padding: 2px 0;
+      cursor: pointer;
+    }
+    button.select-all-toggle:hover { text-decoration: underline; }
+
     .review-card .rc-critic {
       margin-left: auto;
       display: flex;
@@ -3264,7 +3303,11 @@
         promoted: !!r.promoted || (r.mode === "full" && !!r.rebuttal),
         streaming: false,
         anchored: false,
-      }));
+      }))
+      // Selection is session state: it is never stored, so a restored
+      // conversation comes back at the defaults rather than at whatever was
+      // ticked before the reload.
+      .map((r) => ({ ...r, apply: defaultApply(r) }));
     return out.length ? out : null;
   }
 
@@ -3316,6 +3359,57 @@
 
   function reviewFullText(review) {
     return [review.verdict, review.body].filter(Boolean).join("\n\n");
+  }
+
+  // A passage review with a comment is a different thing from one without: the
+  // reader has said something and the reviewer is answering THEM, not grading
+  // a paragraph. The server drops the verdict instruction for these (see
+  // buildPassageCommentPrompt), and nothing here renders a stance for one.
+  function isCommentReview(review) {
+    return review && review.mode === "passage" && !!review.userNote;
+  }
+
+  // Whether a critique starts ticked for "Apply to answer".
+  //
+  // A verdict is a judgement on the passage, so it is a correction by default.
+  // A conversational reply is not: the reviewer was answering the reader, and
+  // "you're right, but I can't verify the number" is not an instruction to
+  // rewrite anything. Those start off, and the reader turns them on.
+  //
+  // Session state only — see serializeReviews(), which never writes it.
+  function defaultApply(review) {
+    return review.mode === "passage" && !isCommentReview(review);
+  }
+
+  // Verdicts arrive as the reviewer's own words — "Agree", "Partly agree —
+  // the units are missing", "Disagree ...". They are rendered in the first
+  // person, naming the model that WROTE the reviewed text, so the card reads
+  // as one model talking about another rather than as a grade handed down.
+  //
+  // The name comes from the message's own `model`, NOT from `primary`: roles
+  // can be swapped after an answer is written, and a card that said "I agree
+  // with ChatGPT" about a passage Claude wrote would simply be false.
+  //
+  // Applied at RENDER time rather than baked into the stored review, so the
+  // saved text stays the reviewer's own words.
+  const STANCE_PATTERNS = [
+    [/^partly\s+agree\b/i, "I partly agree with "],
+    [/^partially\s+agree\b/i, "I partly agree with "],
+    [/^agree\b/i, "I agree with "],
+    [/^disagree\b/i, "I disagree with "],
+  ];
+
+  function stanceLine(verdict, authorModel) {
+    const src = (verdict || "").trim();
+    if (!src) return "";
+    const id = MODELS[authorModel] ? authorModel : primary;
+    const name = MODELS[id] ? MODELS[id].name : "the other model";
+    for (const [re, label] of STANCE_PATTERNS) {
+      if (re.test(src)) return label + name + src.replace(re, "");
+    }
+    // "Depends on X", or anything the reviewer phrased its own way: left as
+    // written rather than forced into a stance it did not take.
+    return src;
   }
 
   // The small "didn't finish" notice. Informational, not an error.
@@ -4270,7 +4364,9 @@
     setPanelHeading(rec);
     applyPanelButton();
     if (!rec) return;
+    if (heldPassageReviews().length > 1) body.appendChild(buildSelectAllRow(rec));
     orderedReviews(rec).forEach((r) => body.appendChild(buildReviewCard(rec, r)));
+    refreshSelectAllToggle();
   }
 
   // Re-render the panel only if it is currently showing this message.
@@ -4303,7 +4399,9 @@
       const note = document.createElement("div");
       note.className = "critique-note";
       const b = document.createElement("b");
-      b.textContent = "You asked:";
+      // "You said:" — in comment mode this is a statement the reviewer is
+      // answering, not a question it is being quizzed on.
+      b.textContent = "You said:";
       note.appendChild(b);
       note.appendChild(document.createTextNode(" " + review.userNote));
       box.appendChild(note);
@@ -4314,6 +4412,59 @@
       box.title = box.title || "Jump to this passage";
     }
     return box;
+  }
+
+  // "Apply to answer" — the reader decides which readings should change the
+  // answer, not the model. Ticking one relabels the update button in place;
+  // the cards are not rebuilt, so the panel doesn't jump under the cursor.
+  function buildApplyToggle(review) {
+    const label = document.createElement("label");
+    label.className = "rc-apply";
+    label.title = "Include this critique when updating the answer";
+
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = !!review.apply;
+    box.onchange = () => {
+      review.apply = box.checked;
+      refreshSelectionUi();
+    };
+
+    const text = document.createElement("span");
+    text.textContent = "Apply to answer";
+
+    label.appendChild(box);
+    label.appendChild(text);
+    return label;
+  }
+
+  // One text toggle above the cards. Only worth showing with more than one
+  // tickable card — with a single card its own box already is the toggle.
+  function buildSelectAllRow(rec) {
+    const row = document.createElement("div");
+    row.className = "select-all-row";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "select-all-toggle";
+    btn.textContent = "Select all";
+    btn.onclick = () => {
+      const held = heldPassageReviews();
+      // "Deselect all" only once everything is on; otherwise it fills in.
+      const turnOn = selectedPassageReviews().length !== held.length;
+      held.forEach((r) => { r.apply = turnOn; });
+      // Update the boxes in place rather than re-rendering the list.
+      held.forEach((r) => {
+        const box = $("panel-body").querySelector(
+          `.review-card[data-review="${r.id}"] .rc-apply input`
+        );
+        if (box) box.checked = turnOn;
+      });
+      refreshSelectionUi();
+    };
+
+    row.appendChild(btn);
+    return row;
   }
 
   function buildReviewCard(rec, review) {
@@ -4332,6 +4483,11 @@
       num.title = "Jump to this passage";
       num.onclick = () => focusMarkerFromCard(rec, review);
       head.appendChild(num);
+
+      // Only passage critiques can be applied — "Update answer" has never
+      // sent a full review, which has no paragraph to quote — so only they
+      // get a tick box. A box on a full-review card would do nothing.
+      if (!review.streaming) head.appendChild(buildApplyToggle(review));
     }
     const badge = document.createElement("span");
     badge.className = "mode-badge" + (review.mode === "passage" ? " passage" : "");
@@ -4356,10 +4512,13 @@
 
     card.appendChild(buildExcerpt(rec, review));
 
-    if (review.verdict) {
+    // Comment reviews carry no verdict at all (the server never asks for one),
+    // so this renders nothing for them — no stance line, no Agree/Disagree.
+    // Every other review, passage or full, gets the same first-person wording.
+    if (review.verdict && !isCommentReview(review)) {
       const v = document.createElement("div");
       v.className = "rc-verdict";
-      v.textContent = review.verdict;
+      v.textContent = stanceLine(review.verdict, rec.model);
       card.appendChild(v);
     }
 
@@ -4506,7 +4665,9 @@
       tools: null,
       rebuttal: null,
       anchored: false,
+      apply: false,          // set below, once the mode is known
     };
+    entry.apply = defaultApply(entry);
     rec.reviews = (rec.reviews || []).concat(entry);
     if (entry.mode === "passage") refreshMessage(rec);   // highlight + marker
     renderPanel(rec);
@@ -4569,9 +4730,17 @@
 
     if (failure) handleError({ message: failure }, criticAtRequest);
 
-    const split = splitVerdict(entry.text);
-    entry.verdict = split.verdict;
-    entry.body = split.body || entry.text;
+    // A comment reply is free-form prose answering the reader; there is no
+    // verdict line to lift out of it, and treating its first sentence as one
+    // would invent a stance the reviewer was never asked for.
+    if (isCommentReview(entry)) {
+      entry.verdict = "";
+      entry.body = entry.text;
+    } else {
+      const split = splitVerdict(entry.text);
+      entry.verdict = split.verdict;
+      entry.body = split.body || entry.text;
+    }
 
     // A review is a billed call whether or not it is ever sent back.
     recordSpend(MODELS[criticAtRequest].provider, entry.apiModel, entry.usage);
@@ -4679,9 +4848,14 @@
         if (out.errorMessage) handleError({ message: out.errorMessage }, criticModel);
       }
 
-      const split = splitVerdict(review.text);
-      review.verdict = split.verdict;
-      review.body = split.body || review.text;
+      if (isCommentReview(review)) {
+        review.verdict = "";
+        review.body = review.text;
+      } else {
+        const split = splitVerdict(review.text);
+        review.verdict = split.verdict;
+        review.body = split.body || review.text;
+      }
       renderPanel(rec);
       saveCurrent();
     };
@@ -4697,11 +4871,18 @@
       if (review.sourceQuestion) {
         bits.push('The user originally asked:\n"""' + review.sourceQuestion + '"""');
       }
-      bits.push(
-        'You were giving a second opinion on this one highlighted passage:\n"""' +
-        (review.selectionText || "") + '"""'
-      );
-      if (review.userNote) bits.push("The user also asked: " + review.userNote);
+      if (isCommentReview(review)) {
+        bits.push(
+          'You were answering the user about this passage, written by another ' +
+          'AI model:\n"""' + (review.selectionText || "") + '"""'
+        );
+        bits.push('The user said:\n"""' + review.userNote + '"""');
+      } else {
+        bits.push(
+          'You were giving a second opinion on this one highlighted passage:\n"""' +
+          (review.selectionText || "") + '"""'
+        );
+      }
       return bits.join("\n\n");
     }
     const ctxLine = review.sourceQuestion
@@ -4729,7 +4910,10 @@
   async function updateAnswerFromReviews() {
     const rec = panelMessage();
     if (!rec) return;
-    const held = heldPassageReviews();
+    // Only the ticked ones. An unticked critique is absent from the request
+    // entirely — not passed as context, not listed as rejected. The model is
+    // never told it existed.
+    const held = selectedPassageReviews();
     if (!held.length || busyState || activeStream) return;
 
     // The answer is rewritten by whoever wrote it, not by whoever happens to
@@ -6520,19 +6704,40 @@
     btn.disabled = false;                   // Stop must stay clickable
     label.textContent = "Stop";
 
-    const n = heldCritiqueCount();
-    update.hidden = streaming;
-    update.textContent = n
-      ? `Update answer (${n} critique${n === 1 ? "" : "s"})`
-      : "Update answer";
-    // Enabled only with something to act on, and never mid-turn.
-    update.disabled = n === 0 || busyState || !!activeStream;
-    update.title = n === 0
-      ? "Critique a paragraph first"
-      : `Send ${n} critique${n === 1 ? "" : "s"} back in one request and append the updated answer`;
+    const total = heldPassageReviews().length;
+    const picked = selectedPassageReviews().length;
+    const word = `critique${total === 1 ? "" : "s"}`;
 
-    // Nothing to show at all: keep the footer out of the layout.
-    foot.hidden = !streaming && n === 0;
+    update.hidden = streaming;
+    update.textContent =
+      total === 0 ? "Update answer"
+      : picked === total ? `Update answer (${total} ${word})`
+      : `Update answer (${picked} of ${total} ${word})`;
+    // Enabled only with something ticked, and never mid-turn.
+    update.disabled = picked === 0 || busyState || !!activeStream;
+    update.title =
+      total === 0 ? "Critique a paragraph first"
+      : picked === 0 ? "Tick at least one critique to apply"
+      : `Send ${picked} ${picked === 1 ? "critique" : "critiques"} back in one request and append the updated answer`;
+
+    // Shown whenever there is anything to tick, so a disabled button with a
+    // reason is visible rather than the footer vanishing.
+    foot.hidden = !streaming && total === 0;
+    refreshSelectAllToggle();
+  }
+
+  // Selection changed: relabel the button and the select-all toggle without
+  // rebuilding the cards, so ticking a box doesn't scroll the panel.
+  function refreshSelectionUi() {
+    applyPanelButton();
+  }
+
+  function refreshSelectAllToggle() {
+    const el = $("panel-body").querySelector(".select-all-toggle");
+    if (!el) return;
+    const total = heldPassageReviews().length;
+    const picked = selectedPassageReviews().length;
+    el.textContent = picked === total ? "Deselect all" : "Select all";
   }
 
   // The critiques the Update button will actually send: passage reviews on the
@@ -6546,8 +6751,12 @@
       (r) => r.mode === "passage" && !r.streaming && (r.verdict || r.body)
     );
   }
-  function heldCritiqueCount() {
-    return heldPassageReviews().length;
+
+  // The subset the reader has actually ticked. This — not heldPassageReviews —
+  // is what reaches the model: an unticked critique is absent from the request
+  // entirely, not included and marked as rejected.
+  function selectedPassageReviews() {
+    return heldPassageReviews().filter((r) => r.apply);
   }
 
   // --- The shared streaming driver ------------------------------------
