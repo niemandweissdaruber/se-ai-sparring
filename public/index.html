@@ -2460,6 +2460,15 @@
     // gpt-5.6-sol is set to the promotional $4/$20; the standard rate is $5/$30.
     // Last checked: 2026-08-26. RE-CHECK PERIODICALLY.
 
+    // Opus 4.8 and Opus 5 are the same rate. Both entries stay so the model
+    // can be swapped in functions/api/chat.js without the cost line dropping.
+    "claude-opus-4-8": {
+      input:      5.00,
+      output:    25.00,
+      cacheRead:  0.50,  // 0.1x base input
+      cacheWrite: 6.25,  // 1.25x base input (5-min write); 1-hour write is 10.00
+    },
+
     "claude-opus-5": {
       input:      5.00,
       output:    25.00,

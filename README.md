@@ -54,13 +54,20 @@ Both model IDs live in a single `CONFIG` constant at the top of `functions/api/c
 
 ```js
 const CONFIG = {
-  anthropic: { model: "claude-sonnet-4-20250514", /* … */ },
-  openai:    { model: "gpt-4o", /* … */ },
+  anthropic: { model: "claude-opus-4-8", /* … */ },
+  openai:    { model: "gpt-5.6-sol", /* … */ },
 };
 ```
 
-Change the `model` strings there — nothing else needs to move. Verify the exact
-current model IDs against each provider's docs.
+Change the `model` strings there — but two things do not live in `CONFIG`:
+
+- **Pricing** is keyed by exact model ID in the `PRICING` object in `public/index.html`.
+  A model with no entry shows no cost estimate.
+- **Thinking** is set per Anthropic call. Opus 4.8 runs without thinking unless
+  `thinking: { type: "adaptive" }` is sent; Opus 5 thinks by default. Both call
+  sites send it explicitly, so a swap between them needs no change here.
+
+Verify the exact current model IDs against each provider's docs.
 
 ---
 

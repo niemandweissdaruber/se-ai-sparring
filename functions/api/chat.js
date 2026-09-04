@@ -22,7 +22,7 @@
 // --- CONFIG ---------------------------------------------------------------
 // Both model IDs live here so they're trivial to swap.
 //
-// Anthropic: Claude Opus 5 via the Messages API.
+// Anthropic: Claude Opus 4.8 via the Messages API.
 // OpenAI:    GPT-5.6 Sol via the RESPONSES API (not chat/completions — the
 //            current model family is served through /v1/responses).
 //
@@ -31,7 +31,7 @@
 // call below also reports whether the reply was actually cut off.
 const CONFIG = {
   anthropic: {
-    model: "claude-opus-5",
+    model: "claude-opus-4-8",
     apiUrl: "https://api.anthropic.com/v1/messages",
     version: "2023-06-01",
     maxTokens: 8000,
@@ -697,6 +697,11 @@ async function callAnthropic({ apiKey, system, messages, mcp, maxTokensOverride 
     model: CONFIG.anthropic.model,
     max_tokens: maxTokensOverride || CONFIG.anthropic.maxTokens,
     messages, // [{ role: "user" | "assistant", content: "..." }]
+    // Opus 4.8 runs WITHOUT thinking unless this is set explicitly — unlike
+    // Opus 5, where adaptive thinking is the default. Omitted, replies lose
+    // reasoning AND the model tends to write its reasoning into the visible
+    // answer, which the streaming path below would render as answer text.
+    thinking: { type: "adaptive" },
   };
   // Anthropic takes the system prompt as a top-level field, not a message.
   if (system) payload.system = system;
@@ -1279,6 +1284,10 @@ async function streamAnthropic({ apiKey, system, messages, send, mcp }) {
     model: CONFIG.anthropic.model,
     max_tokens: CONFIG.anthropic.maxTokens,
     messages,
+    // Explicit for the same reason as in callAnthropic() — Opus 4.8 does not
+    // think unless asked. Thinking deltas are ignored below (display defaults
+    // to "omitted" on this model, so they carry no text anyway).
+    thinking: { type: "adaptive" },
     stream: true,
   };
   if (system) payload.system = system;
